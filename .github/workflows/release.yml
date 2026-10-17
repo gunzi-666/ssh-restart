@@ -18,7 +18,10 @@ jobs:
   # ---------------- Windows ----------------
   build-windows:
     name: 构建 Windows
-    runs-on: windows-latest
+    # 固定到 windows-2022 镜像：自带 VS2022，Flutter 可正确选用
+    # “Visual Studio 17 2022” generator；windows-latest 较新镜像会导致
+    # Flutter 误选 “Visual Studio 16 2019” 而报 CMake 找不到 VS 的错误。
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
