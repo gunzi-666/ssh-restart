@@ -1,0 +1,121 @@
+name: Release
+
+# 推送形如 v1.0.0 的标签时触发；也可手动触发（需填写 tag）。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的版本号（例如 v1.0.0）'
+        required: true
+
+env:
+  FLUTTER_VERSION: 3.35.7
+
+jobs:
+  # ---------------- Windows ----------------
+  build-windows:
+    name: 构建 Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: 构建 Windows Release
+        run: flutter build windows --release
+      - name: 打包为 zip
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath SSH-Restart-Windows.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: SSH-Restart-Windows.zip
+
+  # ---------------- macOS ----------------
+  build-macos:
+    name: 构建 macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: 构建 macOS Release
+        run: flutter build macos --release
+      - name: 打包 .app 为 zip
+        run: |
+          APP_PATH=$(find build/macos/Build/Products/Release -maxdepth 1 -name "*.app" | head -n 1)
+          echo "打包: $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" SSH-Restart-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: SSH-Restart-macOS.zip
+
+  # ---------------- Android ----------------
+  build-android:
+    name: 构建 Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: 构建 APK（按 ABI 拆分 + 通用包）
+        run: |
+          flutter build apk --release
+          flutter build apk --release --split-per-abi
+      - name: 收集 APK
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/SSH-Restart-universal.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/SSH-Restart-arm64-v8a.apk || true
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/SSH-Restart-armeabi-v7a.apk || true
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/SSH-Restart-x86_64.apk || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*.apk
+
+  # ---------------- 发布 ----------------
+  release:
+    name: 创建 Release
+    needs: [build-windows, build-macos, build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 整理产物
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.zip" -o -name "*.apk" \) -exec cp {} release/ \;
+          ls -lh release
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
