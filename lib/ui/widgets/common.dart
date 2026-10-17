@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -47,6 +48,18 @@ Future<void> copyText(BuildContext context, String text, {String? tip}) async {
   if (context.mounted) showToast(context, tip ?? '已复制到剪贴板');
 }
 
+/// 用当前 Material 主题的亮暗与主色包裹 Cupertino 弹窗，使其配色一致。
+Widget _cupertinoWrap(BuildContext context, Widget child) {
+  final t = Theme.of(context);
+  return CupertinoTheme(
+    data: CupertinoThemeData(
+      brightness: t.brightness,
+      primaryColor: t.colorScheme.primary,
+    ),
+    child: child,
+  );
+}
+
 Future<String?> promptText(
   BuildContext context, {
   required String title,
@@ -58,26 +71,35 @@ Future<String?> promptText(
   String okText = '确定',
 }) {
   final ctrl = TextEditingController(text: initial);
-  return showDialog<String>(
+  return showCupertinoDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: SizedBox(
-        width: 420,
-        child: TextField(
-          controller: ctrl,
-          autofocus: true,
-          obscureText: obscure,
-          maxLines: obscure ? 1 : maxLines,
-          decoration: InputDecoration(labelText: label, hintText: hint),
-          onSubmitted: maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
+    barrierDismissible: true,
+    builder: (ctx) => _cupertinoWrap(
+      context,
+      CupertinoAlertDialog(
+        title: Text(title, style: const TextStyle(height: 1.4)),
+        content: Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: CupertinoTextField(
+            controller: ctrl,
+            autofocus: true,
+            obscureText: obscure,
+            maxLines: obscure ? 1 : maxLines,
+            minLines: 1,
+            placeholder: hint ?? label,
+            onSubmitted:
+                maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
+          ),
         ),
+        actions: [
+          CupertinoDialogAction(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          CupertinoDialogAction(
+              isDefaultAction: true,
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: Text(okText)),
+        ],
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-        FilledButton(
-            onPressed: () => Navigator.pop(ctx, ctrl.text), child: Text(okText)),
-      ],
     ),
   );
 }
@@ -89,26 +111,70 @@ Future<bool> confirm(
   String okText = '确定',
   bool danger = false,
 }) async {
-  final r = await showDialog<bool>(
+  final r = await showCupertinoDialog<bool>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text(title),
-      content: message == null ? null : Text(message),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-        FilledButton(
-          style: danger
-              ? FilledButton.styleFrom(
-                  backgroundColor: Theme.of(ctx).colorScheme.error)
-              : null,
-          onPressed: () => Navigator.pop(ctx, true),
-          child: Text(okText),
-        ),
-      ],
+    barrierDismissible: true,
+    builder: (ctx) => _cupertinoWrap(
+      context,
+      CupertinoAlertDialog(
+        title: Text(title, style: const TextStyle(height: 1.4)),
+        content: message == null
+            ? null
+            : Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(message, style: const TextStyle(height: 1.4))),
+        actions: [
+          CupertinoDialogAction(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          CupertinoDialogAction(
+            isDefaultAction: !danger,
+            isDestructiveAction: danger,
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(okText),
+          ),
+        ],
+      ),
     ),
   );
   return r ?? false;
+}
+
+/// 统一风格的下拉选择框：普通下拉行为，圆角菜单、配色跟随主题。
+class AppDropdown<T> extends StatelessWidget {
+  const AppDropdown({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final String label;
+  final T value;
+  final List<({T value, String label})> options;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label),
+      borderRadius: BorderRadius.circular(12),
+      dropdownColor: cs.surfaceContainerHigh,
+      icon: Icon(CupertinoIcons.chevron_down,
+          size: 15, color: cs.onSurfaceVariant),
+      items: [
+        for (final o in options)
+          DropdownMenuItem(
+              value: o.value,
+              child: Text(o.label, overflow: TextOverflow.ellipsis)),
+      ],
+      onChanged: (v) => onChanged(v as T),
+    );
+  }
 }
 
 class SectionTitle extends StatelessWidget {

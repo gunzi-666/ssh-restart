@@ -60,3 +60,6 @@ secrets.json
 # 本地用户数据/备份（如果有人把数据放进仓库目录）
 *.sshrestart-backup
 data.json
+
+# 内部需求文档，不随仓库发布
+需求.md

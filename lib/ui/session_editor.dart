@@ -136,15 +136,14 @@ class _SessionEditorState extends State<SessionEditor> {
 
   Widget _groupPicker() {
     final store = context.watch<AppStore>();
-    return DropdownButtonFormField<String?>(
-      initialValue: store.groupById(s.groupId)?.id,
-      decoration: const InputDecoration(labelText: '分组'),
-      items: [
-        const DropdownMenuItem(value: null, child: Text('（根目录）')),
-        for (final g in store.groups)
-          DropdownMenuItem(value: g.id, child: Text(g.name)),
+    return AppDropdown<String?>(
+      label: '分组',
+      value: store.groupById(s.groupId)?.id,
+      options: [
+        (value: null, label: '（根目录）'),
+        for (final g in store.groups) (value: g.id, label: g.name),
       ],
-      onChanged: (v) => s.groupId = v,
+      onChanged: (v) => setState(() => s.groupId = v),
     );
   }
 
@@ -240,14 +239,14 @@ class _SessionEditorState extends State<SessionEditor> {
 
   Widget _advanced() {
     return _pad([
-      DropdownButtonFormField<String>(
-        initialValue: s.charset.toUpperCase() == 'GBK' ? 'GBK' : 'UTF-8',
-        decoration: const InputDecoration(labelText: '终端编码'),
-        items: const [
-          DropdownMenuItem(value: 'UTF-8', child: Text('UTF-8')),
-          DropdownMenuItem(value: 'GBK', child: Text('GBK')),
+      AppDropdown<String>(
+        label: '终端编码',
+        value: s.charset.toUpperCase() == 'GBK' ? 'GBK' : 'UTF-8',
+        options: const [
+          (value: 'UTF-8', label: 'UTF-8'),
+          (value: 'GBK', label: 'GBK'),
         ],
-        onChanged: (v) => s.charset = v ?? 'UTF-8',
+        onChanged: (v) => setState(() => s.charset = v),
       ),
       TextFormField(
         controller: _init,
@@ -329,15 +328,13 @@ class _SessionEditorState extends State<SessionEditor> {
       Text(isVnc
           ? '通过一个已保存的 SSH 会话建立隧道，再连接上面填写的 VNC 地址（地址相对于 SSH 服务器）。'
           : '先登录跳板机，再经由跳板机连接目标主机（相当于 ssh -J）。目标主机地址相对于跳板机。'),
-      DropdownButtonFormField<String?>(
-        initialValue: store.sessionById(s.jumpSessionId)?.id,
-        decoration: InputDecoration(labelText: isVnc ? 'SSH 隧道会话' : '跳板机'),
-        items: [
-          const DropdownMenuItem(value: null, child: Text('不使用')),
+      AppDropdown<String?>(
+        label: isVnc ? 'SSH 隧道会话' : '跳板机',
+        value: store.sessionById(s.jumpSessionId)?.id,
+        options: [
+          (value: null, label: '不使用'),
           for (final c in candidates)
-            DropdownMenuItem(
-                value: c.id,
-                child: Text('${c.displayName}  (${c.username}@${c.host})')),
+            (value: c.id, label: '${c.displayName}  (${c.username}@${c.host})'),
         ],
         onChanged: (v) => setState(() => s.jumpSessionId = v),
       ),
