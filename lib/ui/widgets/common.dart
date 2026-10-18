@@ -48,17 +48,16 @@ Future<void> copyText(BuildContext context, String text, {String? tip}) async {
   if (context.mounted) showToast(context, tip ?? '已复制到剪贴板');
 }
 
-/// 用当前 Material 主题的亮暗与主色包裹 Cupertino 弹窗，使其配色一致。
-Widget _cupertinoWrap(BuildContext context, Widget child) {
-  final t = Theme.of(context);
-  return CupertinoTheme(
-    data: CupertinoThemeData(
-      brightness: t.brightness,
-      primaryColor: t.colorScheme.primary,
-    ),
-    child: child,
-  );
-}
+/// 统一的圆角标题样式：使用系统字体，保证中文标题完整显示、不被裁剪。
+Widget _dialogTitle(BuildContext context, String title) => Text(
+      title,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 17,
+        fontWeight: FontWeight.w600,
+        color: Theme.of(context).colorScheme.onSurface,
+      ),
+    );
 
 Future<String?> promptText(
   BuildContext context, {
@@ -71,34 +70,54 @@ Future<String?> promptText(
   String okText = '确定',
 }) {
   final ctrl = TextEditingController(text: initial);
-  return showCupertinoDialog<String>(
+  return showDialog<String>(
     context: context,
     barrierDismissible: true,
-    builder: (ctx) => _cupertinoWrap(
-      context,
-      CupertinoAlertDialog(
-        title: Text(title, style: const TextStyle(height: 1.4)),
-        content: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: CupertinoTextField(
-            controller: ctrl,
-            autofocus: true,
-            obscureText: obscure,
-            maxLines: obscure ? 1 : maxLines,
-            minLines: 1,
-            placeholder: hint ?? label,
-            onSubmitted:
-                maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
+    builder: (ctx) => Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _dialogTitle(ctx, title),
+              const SizedBox(height: 18),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                obscureText: obscure,
+                maxLines: obscure ? 1 : maxLines,
+                minLines: 1,
+                decoration: InputDecoration(
+                  labelText: label,
+                  hintText: hint,
+                  isDense: true,
+                ),
+                onSubmitted:
+                    maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消')),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                        onPressed: () => Navigator.pop(ctx, ctrl.text),
+                        child: Text(okText)),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
-        actions: [
-          CupertinoDialogAction(
-              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          CupertinoDialogAction(
-              isDefaultAction: true,
-              onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: Text(okText)),
-        ],
       ),
     ),
   );
@@ -111,31 +130,59 @@ Future<bool> confirm(
   String okText = '确定',
   bool danger = false,
 }) async {
-  final r = await showCupertinoDialog<bool>(
+  final r = await showDialog<bool>(
     context: context,
     barrierDismissible: true,
-    builder: (ctx) => _cupertinoWrap(
-      context,
-      CupertinoAlertDialog(
-        title: Text(title, style: const TextStyle(height: 1.4)),
-        content: message == null
-            ? null
-            : Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(message, style: const TextStyle(height: 1.4))),
-        actions: [
-          CupertinoDialogAction(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          CupertinoDialogAction(
-            isDefaultAction: !danger,
-            isDestructiveAction: danger,
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(okText),
+    builder: (ctx) {
+      final cs = Theme.of(ctx).colorScheme;
+      return Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 380),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _dialogTitle(ctx, title),
+                if (message != null) ...[
+                  const SizedBox(height: 12),
+                  Text(message,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 13.5,
+                          height: 1.4,
+                          color: cs.onSurfaceVariant)),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('取消')),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        style: danger
+                            ? FilledButton.styleFrom(
+                                backgroundColor: cs.error,
+                                foregroundColor: cs.onError)
+                            : null,
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: Text(okText),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
-    ),
+        ),
+      );
+    },
   );
   return r ?? false;
 }

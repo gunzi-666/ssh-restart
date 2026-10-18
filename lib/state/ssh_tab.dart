@@ -13,6 +13,7 @@ import '../services/ssh/server_monitor.dart';
 import '../services/ssh/sftp_service.dart';
 import '../services/ssh/ssh_connector.dart';
 import 'app_tab.dart';
+import 'editor_file.dart';
 
 /// 一个 SSH 标签页：终端、状态监控、SFTP 与端口转发共用同一条 SSH 连接。
 class SshTab extends AppTab {
@@ -25,6 +26,7 @@ class SshTab extends AppTab {
       _shell?.resizeTerminal(w, h, pw, ph);
     };
     terminal.onTitleChange = (t) {
+      if (remoteTitle == t) return;
       remoteTitle = t;
       notifyListeners();
     };
@@ -49,7 +51,47 @@ class SshTab extends AppTab {
   bool _typedLineDirty = false;
   int _connectSeq = 0;
 
+  /// 会话内打开的文件编辑器（副标签）。subTab=0 为主工作区（终端），
+  /// 1..n 对应 editors[subTab-1]。
+  final List<EditorFile> editors = [];
+  int subTab = 0;
+
   SSHClient? get client => _conn?.client;
+
+  /// 打开（或聚焦已打开的）文件作为会话内的编辑副标签。
+  void openEditor(String path) {
+    final s = sftp;
+    if (s == null) return;
+    final idx = editors.indexWhere((f) => f.path == path);
+    if (idx >= 0) {
+      subTab = idx + 1;
+      notifyListeners();
+      return;
+    }
+    final f = EditorFile(sftp: s, path: path);
+    editors.add(f);
+    subTab = editors.length;
+    notifyListeners();
+    f.load();
+  }
+
+  void closeEditor(EditorFile f) {
+    final idx = editors.indexOf(f);
+    if (idx < 0) return;
+    editors.removeAt(idx);
+    // 关闭后尽量停留在相邻的副标签上。
+    if (subTab > editors.length) subTab = editors.length;
+    if (subTab == idx + 1 && subTab > 0) {
+      subTab = subTab.clamp(0, editors.length);
+    }
+    notifyListeners();
+    f.dispose();
+  }
+
+  void activateSubTab(int i) {
+    subTab = i.clamp(0, editors.length);
+    notifyListeners();
+  }
 
   bool get isGbk => config.charset.toUpperCase() == 'GBK';
 
@@ -100,14 +142,19 @@ class SshTab extends AppTab {
       notifyListeners();
 
       // 可选：为常见命令启用彩色输出（很多服务器 root 的 shell 默认未开启）。
+      // 同时为 bash 设置彩色提示符（绿色 用户@主机、蓝色 路径），
+      // 让真实连接的观感与设置里的预览一致。
       // 行首空格可避免写入带 ignorespace 的历史；clear 收起这条噪声。
       if (store.settings.terminalColorHelper) {
-        Future.delayed(const Duration(milliseconds: 400), () {
+        Future.delayed(const Duration(milliseconds: 500), () {
           sendText(
+            " export CLICOLOR=1;"
             " alias ls='ls --color=auto'; alias ll='ls -alF --color=auto';"
             " alias la='ls -A --color=auto'; alias grep='grep --color=auto';"
             " alias egrep='egrep --color=auto'; alias fgrep='fgrep --color=auto';"
-            " export CLICOLOR=1; clear\r",
+            " if [ -n \"\$BASH_VERSION\" ]; then"
+            " PS1='\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\\$ ';"
+            " fi; clear\r",
             recordHistory: false,
           );
         });
@@ -280,6 +327,10 @@ class SshTab extends AppTab {
   Future<void> close() async {
     _connectSeq++;
     await _teardown();
+    for (final f in editors) {
+      f.dispose();
+    }
+    editors.clear();
     status = TabStatus.disconnected;
     dispose();
   }

@@ -12,7 +12,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/app_store.dart';
 import '../services/ssh/sftp_service.dart';
 import '../state/ssh_tab.dart';
-import 'editor_page.dart';
 import 'widgets/common.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -108,8 +107,7 @@ class _SftpPanelState extends State<SftpPanel> {
   }
 
   void _edit(SftpService s, RemoteEntry e) {
-    Navigator.push(context,
-        MaterialPageRoute(builder: (_) => RemoteEditorPage(sftp: s, path: e.path)));
+    widget.tab.openEditor(e.path);
   }
 
   /// 下载到临时目录并用系统默认程序打开，文件保存后自动上传回服务器。
@@ -280,38 +278,45 @@ class _SftpPanelState extends State<SftpPanel> {
     final single = items.length == 1 ? items.first : null;
     final isArchive = single != null &&
         RegExp(r'\.(zip|tar|tgz|gz|bz2|xz)$', caseSensitive: false).hasMatch(single.name);
+    PopupMenuItem<String> pmi(String value, String label, {Color? color}) =>
+        PopupMenuItem(
+          value: value,
+          height: 34,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Text(label, style: TextStyle(fontSize: 13, color: color)),
+        );
     final r = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy),
       items: [
-        if (single != null && single.isDir)
-          const PopupMenuItem(value: 'open', child: Text('打开')),
+        if (single != null && single.isDir) pmi('open', '打开'),
         if (single != null && !single.isDir) ...[
-          const PopupMenuItem(value: 'edit', child: Text('编辑')),
-          if (_isDesktop) const PopupMenuItem(value: 'local', child: Text('用本地程序打开')),
+          pmi('edit', '编辑'),
+          if (_isDesktop) pmi('local', '用本地程序打开'),
         ],
-        if (items.isNotEmpty) const PopupMenuItem(value: 'download', child: Text('下载')),
-        const PopupMenuItem(value: 'upload', child: Text('上传文件')),
-        if (_isDesktop) const PopupMenuItem(value: 'uploadDir', child: Text('上传文件夹')),
+        if (items.isNotEmpty) pmi('download', '下载'),
+        pmi('upload', '上传文件'),
+        if (_isDesktop) pmi('uploadDir', '上传文件夹'),
         const PopupMenuDivider(),
-        if (single != null) const PopupMenuItem(value: 'rename', child: Text('重命名')),
+        if (single != null) pmi('rename', '重命名'),
         if (items.isNotEmpty) ...[
-          const PopupMenuItem(value: 'chmod', child: Text('文件权限')),
-          const PopupMenuItem(value: 'chown', child: Text('修改属主')),
-          const PopupMenuItem(value: 'compress', child: Text('压缩为 tar.gz')),
+          pmi('chmod', '文件权限'),
+          pmi('chown', '修改属主'),
+          pmi('compress', '压缩为 tar.gz'),
         ],
-        if (isArchive) const PopupMenuItem(value: 'extract', child: Text('解压到当前目录')),
-        if (single != null) const PopupMenuItem(value: 'copyPath', child: Text('复制路径')),
-        if (single != null && single.isDir)
-          const PopupMenuItem(value: 'cdTerm', child: Text('在终端中进入此目录')),
+        if (isArchive) pmi('extract', '解压到当前目录'),
+        if (single != null) ...[
+          pmi('copyName', '复制文件名'),
+          pmi('copyPath', '复制文件路径'),
+        ],
+        if (single != null && single.isDir) pmi('cdTerm', '在终端中进入此目录'),
         const PopupMenuDivider(),
-        const PopupMenuItem(value: 'newFolder', child: Text('新建文件夹')),
-        const PopupMenuItem(value: 'newFile', child: Text('新建文件')),
-        const PopupMenuItem(value: 'refresh', child: Text('刷新')),
+        pmi('newFolder', '新建文件夹'),
+        pmi('newFile', '新建文件'),
+        pmi('refresh', '刷新'),
         if (items.isNotEmpty) ...[
           const PopupMenuDivider(),
-          const PopupMenuItem(
-              value: 'delete', child: Text('删除', style: TextStyle(color: Colors.red))),
+          pmi('delete', '删除', color: Colors.red),
         ],
       ],
     );
@@ -339,6 +344,8 @@ class _SftpPanelState extends State<SftpPanel> {
         _compress(s, items);
       case 'extract':
         _extract(s, single!);
+      case 'copyName':
+        copyText(context, single!.name);
       case 'copyPath':
         copyText(context, single!.path);
       case 'cdTerm':
@@ -415,11 +422,15 @@ class _SftpPanelState extends State<SftpPanel> {
                 onSecondaryTapUp: (d) => _contextMenu(s, null, d.globalPosition),
                 child: ListView.builder(
                   itemCount: list.length + 1,
-                  itemExtent: wide ? 28 : 52,
+                  itemExtent: _isDesktop ? 28 : 52,
                   itemBuilder: (context, i) {
                     if (i == 0) return _parentRow(s, wide);
                     final e = list[i - 1];
-                    return wide ? _row(s, list, e) : _mobileRow(s, list, e);
+                    // 交互模式只看是否桌面端：桌面端始终可双击进目录、
+                    // 右键选中并弹出完整菜单；wide 只决定显示多少列。
+                    return _isDesktop
+                        ? _row(s, list, e, wide)
+                        : _mobileRow(s, list, e);
                   },
                 ),
               ),
@@ -589,7 +600,7 @@ class _SftpPanelState extends State<SftpPanel> {
     return Icon(icon, size: 18);
   }
 
-  Widget _row(SftpService s, List<RemoteEntry> list, RemoteEntry e) {
+  Widget _row(SftpService s, List<RemoteEntry> list, RemoteEntry e, bool wide) {
     final sel = _selected.contains(e.path);
     const ts = TextStyle(fontSize: 12.5);
     return GestureDetector(
@@ -613,12 +624,17 @@ class _SftpPanelState extends State<SftpPanel> {
                     ],
                   ),
                 ),
-                Expanded(child: Text(e.isDir ? '' : formatBytes(e.size), style: ts)),
-                Expanded(flex: 2, child: Text(formatDateTime(e.modified), style: ts)),
-                Expanded(
-                    child: Text(e.permissionString,
-                        style: ts.copyWith(fontFamily: 'monospace', fontSize: 11.5))),
-                Expanded(child: Text(e.owner, style: ts, overflow: TextOverflow.ellipsis)),
+                if (wide) ...[
+                  Expanded(child: Text(e.isDir ? '' : formatBytes(e.size), style: ts)),
+                  Expanded(flex: 2, child: Text(formatDateTime(e.modified), style: ts)),
+                  Expanded(
+                      child: Text(e.permissionString,
+                          style: ts.copyWith(fontFamily: 'monospace', fontSize: 11.5))),
+                  Expanded(child: Text(e.owner, style: ts, overflow: TextOverflow.ellipsis)),
+                ] else if (!e.isDir)
+                  Text(formatBytes(e.size),
+                      style: ts.copyWith(
+                          fontSize: 11, color: Theme.of(context).hintColor)),
               ],
             ),
           ),

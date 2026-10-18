@@ -77,12 +77,15 @@ class _CommandInputBarState extends State<CommandInputBar> {
       showToast(context, '暂无历史命令');
       return;
     }
-    final r = await showModalBottomSheet<String>(
+    final r = await showDialog<String>(
       context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SizedBox(
-        height: MediaQuery.sizeOf(ctx).height * 0.6,
-        child: HistoryList(onPick: (c) => Navigator.pop(ctx, c)),
+      builder: (ctx) => Dialog(
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: 520,
+          height: MediaQuery.sizeOf(ctx).height * 0.6,
+          child: HistoryList(onPick: (c) => Navigator.pop(ctx, c)),
+        ),
       ),
     );
     if (r != null) {

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_tab.dart';
+import '../state/editor_file.dart';
 import '../state/ssh_tab.dart';
 import 'command_panels.dart';
+import 'editor_tab_view.dart';
 import 'forward_panel.dart';
 import 'monitor_panel.dart';
 import 'sftp_panel.dart';
@@ -33,42 +35,186 @@ class _SshTabViewState extends State<SshTabView> {
 
   @override
   Widget build(BuildContext context) {
+    // 工作区（终端/监控/SFTP）作为 child 只构建一次，tab 通知（如标题变化）
+    // 时不会重建这些重面板，避免输入卡顿；仅副标签栏随 tab 变化重建。
+    final workspace = isWide(context) ? _desktop(context) : _mobile(context);
     return ListenableBuilder(
       listenable: tab,
-      builder: (context, _) =>
-          isWide(context) ? _desktop(context) : _mobile(context),
+      builder: (context, child) {
+        if (tab.editors.isEmpty) return child!;
+        return Column(
+          children: [
+            _subTabBar(context),
+            Expanded(
+              child: IndexedStack(
+                index: tab.subTab.clamp(0, tab.editors.length),
+                children: [
+                  child!,
+                  for (final f in tab.editors)
+                    EditorTabView(key: ValueKey(f.path), file: f),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+      child: workspace,
     );
   }
 
-  Widget _statusBanner() {
-    if (tab.status == TabStatus.connecting) {
-      return const LinearProgressIndicator(minHeight: 2);
-    }
-    if (tab.status == TabStatus.error || tab.status == TabStatus.disconnected) {
-      return Material(
-        color: Theme.of(context).colorScheme.errorContainer,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          child: Row(
-            children: [
-              const Icon(Icons.link_off, size: 16),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  tab.status == TabStatus.error
-                      ? '连接失败：${tab.errorMessage ?? ''}'
-                      : '连接已断开',
-                  style: const TextStyle(fontSize: 12),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton(onPressed: tab.reconnect, child: const Text('重新连接')),
-            ],
+  /// 会话内副标签栏：第一个是「终端」主工作区，之后是打开的各个文件。
+  Widget _subTabBar(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      height: 34,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        border: Border(bottom: BorderSide(color: cs.outlineVariant)),
+      ),
+      child: Row(
+        children: [
+          _subChip(context,
+              index: 0,
+              icon: Icons.terminal,
+              label: '终端',
+              closable: false),
+          Container(width: 1, height: 20, color: cs.outlineVariant),
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: tab.editors.length,
+              itemBuilder: (context, i) {
+                final f = tab.editors[i];
+                return ListenableBuilder(
+                  listenable: f,
+                  builder: (context, _) => _subChip(
+                    context,
+                    index: i + 1,
+                    icon: Icons.description_outlined,
+                    label: f.name,
+                    closable: true,
+                    dirty: f.dirty,
+                    onClose: () => _closeEditor(f),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _subChip(
+    BuildContext context, {
+    required int index,
+    required IconData icon,
+    required String label,
+    required bool closable,
+    bool dirty = false,
+    VoidCallback? onClose,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final activeTab = tab.subTab == index;
+    return InkWell(
+      onTap: () => tab.activateSubTab(index),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 200),
+        padding: EdgeInsets.only(left: 12, right: closable ? 4 : 12),
+        decoration: BoxDecoration(
+          color: activeTab ? cs.surface : Colors.transparent,
+          border: Border(
+            bottom: BorderSide(
+                color: activeTab ? cs.primary : Colors.transparent, width: 2),
+            right: BorderSide(color: cs.outlineVariant),
           ),
         ),
-      );
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 14,
+                color: activeTab ? cs.onSurface : cs.onSurfaceVariant),
+            const SizedBox(width: 6),
+            if (dirty)
+              Padding(
+                padding: const EdgeInsets.only(right: 5),
+                child: Icon(Icons.circle, size: 7, color: cs.primary),
+              ),
+            Flexible(
+              child: Text(label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      color: activeTab ? cs.onSurface : cs.onSurfaceVariant,
+                      fontWeight:
+                          activeTab ? FontWeight.w600 : FontWeight.normal)),
+            ),
+            if (closable) ...[
+              const SizedBox(width: 2),
+              InkWell(
+                borderRadius: BorderRadius.circular(5),
+                onTap: onClose,
+                child: Padding(
+                  padding: const EdgeInsets.all(3),
+                  child: Icon(Icons.close, size: 13, color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _closeEditor(EditorFile f) async {
+    if (f.dirty) {
+      final ok = await confirm(context,
+          title: '关闭未保存的文件',
+          message: '“${f.name}”有未保存的修改，确定关闭吗？',
+          danger: true,
+          okText: '关闭');
+      if (!ok) return;
     }
-    return const SizedBox.shrink();
+    tab.closeEditor(f);
+  }
+
+  Widget _statusBanner() {
+    return ListenableBuilder(
+      listenable: tab,
+      builder: (context, _) {
+        if (tab.status == TabStatus.connecting) {
+          return const LinearProgressIndicator(minHeight: 2);
+        }
+        if (tab.status == TabStatus.error ||
+            tab.status == TabStatus.disconnected) {
+          return Material(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              child: Row(
+                children: [
+                  const Icon(Icons.link_off, size: 16),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      tab.status == TabStatus.error
+                          ? '连接失败：${tab.errorMessage ?? ''}'
+                          : '连接已断开',
+                      style: const TextStyle(fontSize: 12),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton(
+                      onPressed: tab.reconnect, child: const Text('重新连接')),
+                ],
+              ),
+            ),
+          );
+        }
+        return const SizedBox.shrink();
+      },
+    );
   }
 
   Widget _desktop(BuildContext context) {
@@ -95,7 +241,10 @@ class _SshTabViewState extends State<SshTabView> {
                 color: cs.surfaceContainerLow,
                 border: Border(right: BorderSide(color: cs.outlineVariant)),
               ),
-              child: MonitorPanel(tab: tab),
+              child: ListenableBuilder(
+                listenable: tab,
+                builder: (context, _) => MonitorPanel(tab: tab),
+              ),
             ),
             DragDivider(
               onDrag: (d) => setState(() => _leftW = (_leftW + d).clamp(180, 480)),
@@ -128,28 +277,40 @@ class _SshTabViewState extends State<SshTabView> {
                         icon: Icon(_showLeft ? Icons.chevron_left : Icons.chevron_right),
                         onPressed: () => setState(() => _showLeft = !_showLeft),
                       ),
-                      for (var i = 0; i < bottomTabs.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 2),
-                          child: TextButton(
-                            style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: _showBottom && _bottomIndex == i
-                                  ? Theme.of(context).colorScheme.secondaryContainer
-                                  : null,
-                            ),
-                            onPressed: () => setState(() {
-                              if (_showBottom && _bottomIndex == i) {
-                                _showBottom = false;
-                              } else {
-                                _bottomIndex = i;
-                                _showBottom = true;
-                              }
-                            }),
-                            child: Text(bottomTabs[i], style: const TextStyle(fontSize: 12.5)),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (var i = 0; i < bottomTabs.length; i++)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 2),
+                                  child: TextButton(
+                                    style: TextButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      backgroundColor: _showBottom &&
+                                              _bottomIndex == i
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .secondaryContainer
+                                          : null,
+                                    ),
+                                    onPressed: () => setState(() {
+                                      if (_showBottom && _bottomIndex == i) {
+                                        _showBottom = false;
+                                      } else {
+                                        _bottomIndex = i;
+                                        _showBottom = true;
+                                      }
+                                    }),
+                                    child: Text(bottomTabs[i],
+                                        style: const TextStyle(fontSize: 12.5)),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                      const Spacer(),
+                      ),
                       IconButton(
                         tooltip: _showBottom ? '收起面板' : '展开面板',
                         iconSize: 16,
@@ -220,9 +381,12 @@ class _SshTabViewState extends State<SshTabView> {
                     ),
                   ),
                   Expanded(
-                    child: SftpPanel(
-                        key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'),
-                        tab: tab),
+                    child: ListenableBuilder(
+                      listenable: tab,
+                      builder: (context, _) => SftpPanel(
+                          key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'),
+                          tab: tab),
+                    ),
                   ),
                 ],
               ),
@@ -236,8 +400,15 @@ class _SshTabViewState extends State<SshTabView> {
   Widget _mobile(BuildContext context) {
     final pages = [
       TerminalPane(tab: tab, showKeyBar: true),
-      SftpPanel(key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'), tab: tab),
-      MonitorPanel(tab: tab),
+      ListenableBuilder(
+        listenable: tab,
+        builder: (context, _) => SftpPanel(
+            key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'), tab: tab),
+      ),
+      ListenableBuilder(
+        listenable: tab,
+        builder: (context, _) => MonitorPanel(tab: tab),
+      ),
       Column(
         children: [
           CommandInputBar(tab: tab),

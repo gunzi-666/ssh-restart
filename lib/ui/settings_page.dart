@@ -48,6 +48,26 @@ class SettingsPage extends StatelessWidget {
   }
 }
 
+/// 设置页内容的统一滚动容器：限制最大宽度并水平居中，
+/// 让宽窗口下的设置项不至于横向铺满、显得空旷。
+class _SettingsScroll extends StatelessWidget {
+  const _SettingsScroll({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: children,
+        ),
+      ),
+    );
+  }
+}
+
 class _GeneralSettings extends StatelessWidget {
   const _GeneralSettings();
 
@@ -59,8 +79,7 @@ class _GeneralSettings extends StatelessWidget {
       0xFF1E88E5, 0xFF00897B, 0xFF43A047, 0xFFF4511E,
       0xFF8E24AA, 0xFFE53935, 0xFF6D4C41, 0xFF546E7A,
     ];
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+    return _SettingsScroll(
       children: [
         const SectionTitle('外观'),
         ListTile(
@@ -161,8 +180,7 @@ class _TerminalSettings extends StatelessWidget {
     final store = context.watch<AppStore>();
     final s = store.settings;
     final theme = terminalThemeByName(s.terminalTheme);
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+    return _SettingsScroll(
       children: [
         const SectionTitle('字体'),
         ListTile(
@@ -416,11 +434,14 @@ class _BackupSettingsState extends State<BackupSettings> {
     final bm = context.watch<BackupManager>();
     final s = store.settings;
     final authorized = bm.drive.authorized;
-    return AbsorbPointer(
-      absorbing: _working || bm.busy,
-      child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: [
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: AbsorbPointer(
+          absorbing: _working || bm.busy,
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            children: [
           if (_working || bm.busy) const LinearProgressIndicator(minHeight: 2),
           const SectionTitle('加密密钥'),
           Padding(
@@ -588,14 +609,16 @@ class _BackupSettingsState extends State<BackupSettings> {
               onChanged: (v) => store.updateSettings((x) => x.gdriveKeepCount = v ?? 10),
             ),
           ),
-          if (bm.status.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text('状态：${bm.status}', style: const TextStyle(fontSize: 12)),
-            ),
-        ],
+            if (bm.status.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('状态：${bm.status}', style: const TextStyle(fontSize: 12)),
+              ),
+          ],
+        ),
       ),
-    );
+    ),
+  );
   }
 }
 
@@ -713,31 +736,38 @@ class _About extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(24),
-      children: [
-        Row(
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
           children: [
-            Icon(Icons.terminal, size: 48, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Row(
               children: [
-                Text('SSH Restart', style: Theme.of(context).textTheme.headlineSmall),
-                const Text('版本 1.0.0'),
+                Icon(Icons.terminal,
+                    size: 48, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('SSH Restart',
+                        style: Theme.of(context).textTheme.headlineSmall),
+                    const Text('版本 1.0.0'),
+                  ],
+                ),
               ],
             ),
+            const SizedBox(height: 24),
+            const Text(
+              '开源的 SSH 客户端，参照 FinalShell 的功能设计：多标签终端、服务器状态监控、'
+              'SFTP 文件管理、命令历史与快速命令、端口转发、代理与跳板机、VNC 远程桌面，'
+              '以及加密的谷歌云盘备份。全部功能免费，无任何付费项。',
+            ),
+            const SizedBox(height: 16),
+            const Text('数据保存在本机，会话密码仅在本机和你自己的加密备份中出现。'),
           ],
         ),
-        const SizedBox(height: 24),
-        const Text(
-          '开源的 SSH 客户端，参照 FinalShell 的功能设计：多标签终端、服务器状态监控、'
-          'SFTP 文件管理、命令历史与快速命令、端口转发、代理与跳板机、VNC 远程桌面，'
-          '以及加密的谷歌云盘备份。全部功能免费，无任何付费项。',
-        ),
-        const SizedBox(height: 16),
-        const Text('数据保存在本机，会话密码仅在本机和你自己的加密备份中出现。'),
-      ],
+      ),
     );
   }
 }

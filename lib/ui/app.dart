@@ -209,6 +209,7 @@ class _SshRestartAppState extends State<SshRestartApp> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       popupMenuTheme: PopupMenuThemeData(
+        menuPadding: const EdgeInsets.symmetric(vertical: 4),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(10),
           side: BorderSide(color: border),

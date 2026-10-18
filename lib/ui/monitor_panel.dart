@@ -146,17 +146,25 @@ class MonitorPanel extends StatelessWidget {
                 children: [
                   Icon(Icons.arrow_upward, size: 13, color: up),
                   const SizedBox(width: 2),
-                  Text(formatSpeed(m.txRate < 0 ? 0 : m.txRate),
-                      style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600, color: up)),
-                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(formatSpeed(m.txRate < 0 ? 0 : m.txRate),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: up)),
+                  ),
+                  const SizedBox(width: 8),
                   Icon(Icons.arrow_downward, size: 13, color: down),
                   const SizedBox(width: 2),
-                  Text(formatSpeed(m.rxRate < 0 ? 0 : m.rxRate),
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: down)),
+                  Expanded(
+                    child: Text(formatSpeed(m.rxRate < 0 ? 0 : m.rxRate),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: down)),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),

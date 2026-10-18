@@ -31,6 +31,10 @@ class _HomePageState extends State<HomePage> {
   bool get _desktopPlatform =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
+  // macOS 下保留系统原生的红绿灯窗口按钮（位于左上角），
+  // 因此不渲染自绘的窗口按钮，并给标题栏左侧留出红绿灯的空间。
+  bool get _isMacDesktop => !kIsWeb && Platform.isMacOS;
+
   TabsController get tabs => context.read<TabsController>();
 
   void _connect(SessionConfig s) {
@@ -122,7 +126,8 @@ class _HomePageState extends State<HomePage> {
             child: Row(
               children: [
                 _maybeDrag(Padding(
-                  padding: const EdgeInsets.only(left: 12, right: 4),
+                  padding: EdgeInsets.only(
+                      left: _isMacDesktop ? 78 : 12, right: 4),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -194,7 +199,7 @@ class _HomePageState extends State<HomePage> {
                   tooltip: '设置',
                   onPressed: _openSettings,
                 ),
-                if (_desktopPlatform) ...[
+                if (_desktopPlatform && !_isMacDesktop) ...[
                   const SizedBox(width: 4),
                   const _WindowButtons(),
                 ] else
@@ -216,37 +221,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _welcome() {
-    return Row(
-      children: [
-        SizedBox(width: 460, child: SessionManagerView(onConnect: _connect)),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(22),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.12),
-                  ),
-                  child: Icon(Icons.terminal,
-                      size: 56, color: Theme.of(context).colorScheme.primary),
-                ),
-                const SizedBox(height: 16),
-                Text('SSH Restart', style: Theme.of(context).textTheme.headlineMedium),
-                const SizedBox(height: 8),
-                const Text('在左侧选择会话双击连接，或新建一个连接'),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
+    // 没有打开任何标签时，让会话管理视图占满整个工作区，
+    // 不再保留右侧的空白占位格子。
+    return SessionManagerView(onConnect: _connect);
   }
 
   // ---------------- 移动端 ----------------

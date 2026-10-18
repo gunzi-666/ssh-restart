@@ -26,6 +26,8 @@ dependencies:
   pointycastle: ^4.0.0
   fast_gbk: ^1.0.0
   window_manager: ^0.4.3
+  re_editor: ^0.10.0
+  re_highlight: ^0.0.3
 
 dev_dependencies:
   flutter_test:

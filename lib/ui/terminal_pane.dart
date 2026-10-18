@@ -233,6 +233,9 @@ class _TerminalPaneState extends State<TerminalPane> {
             _ => TerminalCursorType.block,
           },
           keyboardAppearance: Theme.of(context).brightness,
+          // 桌面端直接用硬件键盘事件取字符，避免 xterm 默认的 IME 文本连接
+          // 因拿不到 keyboard token 而需要先点击才能输入的问题。
+          hardwareKeyboardOnly: !mobile,
           onKeyEvent: _onKey,
           onSecondaryTapDown: (d, _) => _contextMenu(d.globalPosition),
         ),
