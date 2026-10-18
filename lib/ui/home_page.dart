@@ -31,8 +31,8 @@ class _HomePageState extends State<HomePage> {
   bool get _desktopPlatform =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
-  // macOS 下保留系统原生的红绿灯窗口按钮（位于左上角），
-  // 因此不渲染自绘的窗口按钮，并给标题栏左侧留出红绿灯的空间。
+  // macOS 使用系统原生标题栏（含红绿灯），不渲染自绘窗口按钮，
+  // 窗口拖动也交给系统标题栏。
   bool get _isMacDesktop => !kIsWeb && Platform.isMacOS;
 
   TabsController get tabs => context.read<TabsController>();
@@ -95,7 +95,7 @@ class _HomePageState extends State<HomePage> {
 
   /// 桌面端把标题区包成可拖动窗口的区域（双击最大化/还原）。
   Widget _maybeDrag(Widget child) {
-    if (!_desktopPlatform) return child;
+    if (!_desktopPlatform || _isMacDesktop) return child;
     return DragToMoveArea(child: child);
   }
 
@@ -126,8 +126,7 @@ class _HomePageState extends State<HomePage> {
             child: Row(
               children: [
                 _maybeDrag(Padding(
-                  padding: EdgeInsets.only(
-                      left: _isMacDesktop ? 78 : 12, right: 4),
+                  padding: const EdgeInsets.only(left: 12, right: 4),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [

@@ -15,15 +15,18 @@ bool get _isDesktop =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 桌面端：隐藏系统原生标题栏，改用应用自绘的标题栏。
+  // 桌面端：Windows/Linux 隐藏系统标题栏改用自绘标题栏；
+  // macOS 保留系统原生标题栏（红绿灯），应用工具栏位于其下方。
   if (_isDesktop) {
     await windowManager.ensureInitialized();
-    const options = WindowOptions(
-      size: Size(1280, 820),
-      minimumSize: Size(900, 560),
+    final options = WindowOptions(
+      size: const Size(1280, 820),
+      minimumSize: const Size(900, 560),
       center: true,
       backgroundColor: Colors.transparent,
-      titleBarStyle: TitleBarStyle.hidden,
+      title: 'SSH Restart',
+      titleBarStyle:
+          Platform.isMacOS ? TitleBarStyle.normal : TitleBarStyle.hidden,
     );
     unawaited(windowManager.waitUntilReadyToShow(options, () async {
       await windowManager.show();
