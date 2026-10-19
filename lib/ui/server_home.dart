@@ -16,7 +16,8 @@ enum _Scope { all, favorites, recent, group, ungrouped }
 
 enum _TypeFilter { all, ssh, vnc, favorite }
 
-enum _SortKey { name, address, auth, recent }
+/// added 为默认的添加顺序（按创建时间），新服务器排在最后。
+enum _SortKey { added, name, address, auth, recent }
 
 const _mono = TextStyle(
   fontFamily: 'monospace',
@@ -71,11 +72,14 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   String? _groupId;
   _TypeFilter _type = _TypeFilter.all;
   AuthType? _auth;
-  _SortKey _sort = _SortKey.name;
+  _SortKey _sort = _SortKey.added;
   bool _asc = true;
   bool _grid = false;
   int _page = 0;
   String? _selectedId;
+
+  /// 新建/复制后需要自动翻到其所在页的服务器。
+  String? _revealId;
 
   String? _lastTapId;
   DateTime? _lastTapAt;
@@ -97,12 +101,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       });
 
   void _setScope(_Scope scope, {String? groupId}) => _update(() {
-        _scope = scope;
-        _groupId = groupId;
         if (scope == _Scope.recent) {
           _sort = _SortKey.recent;
           _asc = false;
+        } else if (_scope == _Scope.recent) {
+          _sort = _SortKey.added;
+          _asc = true;
         }
+        _scope = scope;
+        _groupId = groupId;
       });
 
   void _focusSearch() {
@@ -174,6 +181,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     }
     int cmp(SessionConfig a, SessionConfig b) {
       switch (_sort) {
+        case _SortKey.added:
+          final c = a.createdAt.compareTo(b.createdAt);
+          return c != 0 ? c : a.id.compareTo(b.id);
         case _SortKey.name:
           return a.displayName
               .toLowerCase()
@@ -232,7 +242,18 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       s.username = '';
     }
     final r = await showSessionEditor(context, s, isNew: true);
-    if (r != null) store.upsertSession(r);
+    if (r != null) {
+      store.upsertSession(r);
+      _reveal(r.id);
+    }
+  }
+
+  void _reveal(String id) {
+    if (!mounted) return;
+    setState(() {
+      _selectedId = id;
+      _revealId = id;
+    });
   }
 
   Future<void> _edit(SessionConfig s) async {
@@ -250,6 +271,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       f.id = newId();
     }
     store.upsertSession(c);
+    _reveal(c.id);
   }
 
   Future<void> _delete(SessionConfig s) async {
@@ -982,6 +1004,11 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       pageSize = math.max(3, ((bodyH - _headerH - 2) / _rowH).floor());
     }
     final pages = math.max(1, (list.length / pageSize).ceil());
+    if (_revealId != null) {
+      final idx = list.indexWhere((s) => s.id == _revealId);
+      if (idx >= 0) _page = idx ~/ pageSize;
+      _revealId = null;
+    }
     final page = _page.clamp(0, pages - 1);
     final start = page * pageSize;
     final end = math.min(start + pageSize, list.length);
@@ -1054,11 +1081,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     final active = _sort == key;
     return InkWell(
       onTap: () => setState(() {
-        if (_sort == key) {
-          _asc = !_asc;
-        } else {
+        final firstAsc = key != _SortKey.recent;
+        if (_sort != key) {
           _sort = key;
-          _asc = key != _SortKey.recent;
+          _asc = firstAsc;
+        } else if (_asc == firstAsc) {
+          _asc = !firstAsc;
+        } else {
+          _sort = _SortKey.added;
+          _asc = true;
         }
       }),
       child: Padding(
