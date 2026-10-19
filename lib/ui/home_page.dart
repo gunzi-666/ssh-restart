@@ -12,6 +12,7 @@ import '../state/app_tab.dart';
 import '../state/ssh_tab.dart';
 import '../state/tabs_controller.dart';
 import '../state/vnc_tab.dart';
+import 'server_home.dart';
 import 'session_manager.dart';
 import 'settings_page.dart';
 import 'ssh_tab_view.dart';
@@ -147,26 +148,46 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () => showSessionManagerDialog(context, _connect),
                 ),
                 const SizedBox(width: 6),
+                // 标签列表按内容收缩，其后直到「+」按钮的空白处都可拖动窗口。
                 Expanded(
-                  child: ReorderableListView.builder(
-                    scrollDirection: Axis.horizontal,
-                    buildDefaultDragHandles: false,
-                    itemCount: tc.tabs.length,
-                    onReorder: tc.move,
-                    itemBuilder: (context, i) {
-                      final t = tc.tabs[i];
-                      return ReorderableDragStartListener(
-                        key: ValueKey(t.id),
-                        index: i,
-                        child: _DesktopTabChip(
-                          tab: t,
-                          active: i == tc.activeIndex,
-                          onTap: () => tc.activate(i),
-                          onClose: () => _closeTab(t),
-                          onMenu: (pos) => _tabMenu(t, pos),
+                  child: LayoutBuilder(
+                    builder: (context, c) => Stack(
+                      children: [
+                        Positioned.fill(
+                            child: _maybeDrag(const SizedBox.expand())),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: c.maxWidth,
+                              minHeight: c.maxHeight,
+                              maxHeight: c.maxHeight,
+                            ),
+                            child: ReorderableListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              shrinkWrap: true,
+                              buildDefaultDragHandles: false,
+                              itemCount: tc.tabs.length,
+                              onReorder: tc.move,
+                              itemBuilder: (context, i) {
+                                final t = tc.tabs[i];
+                                return ReorderableDragStartListener(
+                                  key: ValueKey(t.id),
+                                  index: i,
+                                  child: _DesktopTabChip(
+                                    tab: t,
+                                    active: i == tc.activeIndex,
+                                    onTap: () => tc.activate(i),
+                                    onClose: () => _closeTab(t),
+                                    onMenu: (pos) => _tabMenu(t, pos),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
                         ),
-                      );
-                    },
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -220,9 +241,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _welcome() {
-    // 没有打开任何标签时，让会话管理视图占满整个工作区，
-    // 不再保留右侧的空白占位格子。
-    return SessionManagerView(onConnect: _connect);
+    return ServerHomeView(
+      onConnect: _connect,
+      onOpenSettings: (tab) => _openSettings(tab: tab),
+    );
   }
 
   // ---------------- 移动端 ----------------

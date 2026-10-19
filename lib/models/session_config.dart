@@ -130,6 +130,7 @@ class SessionConfig {
   int createdAt;
   int updatedAt;
   int lastConnectedAt;
+  bool favorite;
   bool deleted;
 
   SessionConfig({
@@ -154,6 +155,7 @@ class SessionConfig {
     int? createdAt,
     int? updatedAt,
     this.lastConnectedAt = 0,
+    this.favorite = false,
     this.deleted = false,
   })  : id = id ?? newId(),
         proxy = proxy ?? ProxyConfig(),
@@ -185,6 +187,7 @@ class SessionConfig {
         'createdAt': createdAt,
         'updatedAt': updatedAt,
         'lastConnectedAt': lastConnectedAt,
+        'favorite': favorite,
         'deleted': deleted,
       };
 
@@ -214,6 +217,7 @@ class SessionConfig {
         createdAt: j['createdAt'] as int?,
         updatedAt: j['updatedAt'] as int?,
         lastConnectedAt: j['lastConnectedAt'] as int? ?? 0,
+        favorite: j['favorite'] as bool? ?? false,
         deleted: j['deleted'] as bool? ?? false,
       );
 

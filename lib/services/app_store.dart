@@ -134,6 +134,13 @@ class AppStore extends ChangeNotifier {
     _changed();
   }
 
+  void toggleFavorite(String id) {
+    final s = sessionById(id);
+    if (s == null) return;
+    s.favorite = !s.favorite;
+    upsertSession(s);
+  }
+
   void touchSession(String id) {
     final s = sessionById(id);
     if (s == null) return;
