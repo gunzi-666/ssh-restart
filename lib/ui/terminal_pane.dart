@@ -47,7 +47,7 @@ class TerminalPane extends StatefulWidget {
 }
 
 class _TerminalPaneState extends State<TerminalPane> {
-  final _focus = FocusNode();
+  FocusNode get _focus => tab.terminalFocus;
   Timer? _copyTimer;
   String _lastCopied = '';
 
@@ -72,7 +72,6 @@ class _TerminalPaneState extends State<TerminalPane> {
   void dispose() {
     tab.terminalController.removeListener(_onSelection);
     _copyTimer?.cancel();
-    _focus.dispose();
     super.dispose();
   }
 
@@ -216,8 +215,15 @@ class _TerminalPaneState extends State<TerminalPane> {
           _zoom(e.scrollDelta.dy < 0 ? 1 : -1);
         }
       },
+      // xterm 在存在选区时首次点击只清除选区而不获取焦点，这里保证任何点击都聚焦终端。
+      onPointerDown: (e) {
+        if (e.buttons == kPrimaryButton && !_focus.hasFocus) {
+          _focus.requestFocus();
+        }
+      },
       child: Container(
-        color: theme.background,
+        clipBehavior: Clip.hardEdge,
+        decoration: BoxDecoration(color: theme.background),
         child: TerminalView(
           tab.terminal,
           controller: tab.terminalController,

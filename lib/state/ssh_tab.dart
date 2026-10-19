@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 import 'package:fast_gbk/fast_gbk.dart';
+import 'package:flutter/widgets.dart' show FocusNode;
 import 'package:xterm/xterm.dart';
 
 import '../models/session_config.dart';
@@ -18,7 +20,12 @@ import 'editor_file.dart';
 /// 一个 SSH 标签页：终端、状态监控、SFTP 与端口转发共用同一条 SSH 连接。
 class SshTab extends AppTab {
   SshTab(super.config, this.store) {
-    terminal = Terminal(maxLines: store.settings.scrollback);
+    // xterm 的 reflow 在宽度变化时会替换整个缓冲区且不校正光标，遇到中文/彩色
+    // 输出时会错乱（最大化再还原后内容丢失、露出旧输出），故关闭。
+    terminal = Terminal(
+      maxLines: store.settings.scrollback,
+      reflowEnabled: false,
+    );
     terminal.onOutput = _onTerminalInput;
     terminal.onResize = (w, h, pw, ph) {
       _cols = w;
@@ -35,6 +42,16 @@ class SshTab extends AppTab {
   final AppStore store;
   late final Terminal terminal;
   final TerminalController terminalController = TerminalController();
+
+  /// 终端的键盘焦点。由快捷命令、历史命令等外部操作在发送后调用 [focusTerminal]，
+  /// 使交互式脚本（如 y/n 确认）可以直接在终端里继续输入。
+  final FocusNode terminalFocus = FocusNode(debugLabel: 'terminal');
+
+  void focusTerminal() {
+    // 移动端终端可能不在当前页，聚焦会意外弹出软键盘。
+    if (Platform.isAndroid || Platform.isIOS) return;
+    terminalFocus.requestFocus();
+  }
 
   SSHConnectResult? _conn;
   SSHSession? _shell;
@@ -331,6 +348,7 @@ class SshTab extends AppTab {
       f.dispose();
     }
     editors.clear();
+    terminalFocus.dispose();
     status = TabStatus.disconnected;
     dispose();
   }

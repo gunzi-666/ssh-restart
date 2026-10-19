@@ -222,8 +222,14 @@ class _SshTabViewState extends State<SshTabView> {
     final bottomTabs = ['命令历史', '快速命令', '隧道', '传输'];
     final bottomViews = [
       HistoryList(
-        onPick: (c) => tab.sendText(c),
-        onRun: (c) => tab.sendText('$c\r', recordHistory: true),
+        onPick: (c) {
+          tab.sendText(c);
+          tab.focusTerminal();
+        },
+        onRun: (c) {
+          tab.sendText('$c\r', recordHistory: true);
+          tab.focusTerminal();
+        },
       ),
       QuickCommandPanel(onSend: (c) => sendQuickCommand(tab, c)),
       ForwardPanel(tab: tab),

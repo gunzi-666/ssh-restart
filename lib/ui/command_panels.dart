@@ -417,4 +417,5 @@ Future<QuickCommand?> showQuickCommandEditor(BuildContext context, QuickCommand 
 void sendQuickCommand(SshTab tab, QuickCommand c) {
   final body = c.command.replaceAll('\r\n', '\n').replaceAll('\n', '\r');
   tab.sendText(c.appendEnter ? '$body\r' : body, recordHistory: true);
+  tab.focusTerminal();
 }
