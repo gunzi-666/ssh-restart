@@ -1,7 +1,7 @@
 name: ssh_restart
 description: "开源 SSH 客户端，功能参照 FinalShell，支持加密的谷歌云盘备份。"
 publish_to: 'none'
-version: 1.0.6+7
+version: 1.0.7+8
 
 environment:
   sdk: ^3.9.2
@@ -29,6 +29,10 @@ dependencies:
   re_editor: ^0.10.0
   re_highlight: ^0.0.3
   archive: ^4.5.2
+  sqlite3: ^2.9.4
+  sqlite3_flutter_libs: ^0.5.42
+  desktop_drop: ^0.8.4
+  screen_retriever: ^0.2.2
 
 dev_dependencies:
   flutter_test:

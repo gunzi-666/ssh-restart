@@ -15,6 +15,7 @@ import '../services/ssh/server_monitor.dart';
 import '../services/ssh/sftp_service.dart';
 import '../services/ssh/ssh_connector.dart';
 import 'app_tab.dart';
+import 'connect_progress.dart';
 import 'editor_file.dart';
 
 /// 一个 SSH 标签页：终端、状态监控、SFTP 与端口转发共用同一条 SSH 连接。
@@ -112,19 +113,60 @@ class SshTab extends AppTab {
 
   bool get isGbk => config.charset.toUpperCase() == 'GBK';
 
+  /// 当前（或最近一次）连接的分步进度；[showProgress] 控制进度面板是否显示。
+  ConnectProgress? progress;
+  bool showProgress = false;
+  Timer? _progressTimer;
+
+  void hideProgress() {
+    _progressTimer?.cancel();
+    if (!showProgress) return;
+    showProgress = false;
+    notifyListeners();
+  }
+
+  /// 首页连接进度弹窗是否正在显示本标签的进度。
+  bool progressViewer = false;
+
+  void _startProgress() {
+    final p = progress = ConnectProgress()..hasViewer = () => progressViewer;
+    p.begin('初始化配置');
+    final jump = store.sessionById(config.jumpSessionId);
+    p.log('目标服务器：${config.displayName}（${config.host}:${config.port}）');
+    if (jump != null) p.log('使用跳板机：${jump.displayName}');
+    if (config.proxy.type != ProxyType.none && config.proxy.host.isNotEmpty) {
+      p.log('使用代理：${config.proxy.type.name.toUpperCase()} '
+          '${config.proxy.host}:${config.proxy.port}');
+    }
+    if (config.legacyAlgorithms) p.log('已启用兼容旧版服务器的算法');
+    _progressTimer?.cancel();
+    showProgress = false;
+    // 连接很快时不闪出面板。
+    _progressTimer = Timer(const Duration(milliseconds: 400), () {
+      if (status == TabStatus.connecting && progress == p) {
+        showProgress = true;
+        notifyListeners();
+      }
+    });
+    notifyListeners();
+  }
+
   @override
   Future<void> connect() async {
     final seq = ++_connectSeq;
     await _teardown();
     setStatus(TabStatus.connecting);
     terminal.write('\r\n\x1b[36m正在连接 ${config.host}:${config.port} …\x1b[0m\r\n');
+    _startProgress();
+    final p = progress!;
     try {
-      final conn = await SSHConnector.connect(config, store);
+      final conn = await SSHConnector.connect(config, store, progress: p);
       if (seq != _connectSeq || isDisposed) {
         conn.closeAll();
         return;
       }
       _conn = conn;
+      p.begin('打开终端');
       final shell = await conn.client.shell(
         pty: SSHPtyConfig(
           type: 'xterm-256color',
@@ -147,6 +189,10 @@ class SshTab extends AppTab {
           onError: (e) => _onDisconnected(seq, e));
 
       store.touchSession(config.id);
+      p.log('终端已打开');
+      p.finish();
+      _progressTimer?.cancel();
+      showProgress = false;
       setStatus(TabStatus.connected);
 
       monitor = ServerMonitor(conn.client)
@@ -185,6 +231,9 @@ class SshTab extends AppTab {
     } catch (e) {
       if (seq != _connectSeq) return;
       final msg = SSHConnector.describeError(e);
+      p.fail(msg);
+      _progressTimer?.cancel();
+      showProgress = true;
       terminal.write('\r\n\x1b[31m连接失败：$msg\x1b[0m\r\n');
       terminal.write('\x1b[33m按回车键重新连接\x1b[0m\r\n');
       setStatus(TabStatus.error, msg);
@@ -342,6 +391,7 @@ class SshTab extends AppTab {
 
   @override
   Future<void> close() async {
+    _progressTimer?.cancel();
     _connectSeq++;
     await _teardown();
     for (final f in editors) {

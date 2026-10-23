@@ -29,13 +29,20 @@ class MonitorPanel extends StatelessWidget {
         children: [
           SizedBox(
             width: 40,
-            child: Text(k,
-                style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor)),
+            child: Text(
+              k,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).hintColor,
+              ),
+            ),
           ),
           Expanded(
-            child: Text(v,
-                style: const TextStyle(fontSize: 12),
-                overflow: TextOverflow.ellipsis),
+            child: Text(
+              v,
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
           ?trailing,
         ],
@@ -48,8 +55,10 @@ class MonitorPanel extends StatelessWidget {
     if (!m.supported) {
       return const Padding(
         padding: EdgeInsets.all(12),
-        child: Text('该服务器不是 Linux 系统，或未提供 /proc 信息，无法显示状态监控。',
-            style: TextStyle(fontSize: 12)),
+        child: Text(
+          '该服务器不是 Linux 系统，或未提供 /proc 信息，无法显示状态监控。',
+          style: TextStyle(fontSize: 12),
+        ),
       );
     }
     final topProcs = [...m.processes]..sort((a, b) => b.mem.compareTo(a.mem));
@@ -64,23 +73,33 @@ class MonitorPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _kv(context, 'IP', tab.config.host,
-                  trailing: InkWell(
-                    onTap: () => copyText(context, tab.config.host),
-                    borderRadius: BorderRadius.circular(6),
-                    child: const Padding(
-                      padding: EdgeInsets.all(2),
-                      child: Icon(Icons.copy, size: 14),
-                    ),
-                  )),
+              _kv(
+                context,
+                'IP',
+                tab.config.host,
+                trailing: InkWell(
+                  onTap: () => copyText(context, tab.config.host),
+                  borderRadius: BorderRadius.circular(6),
+                  child: const Padding(
+                    padding: EdgeInsets.all(2),
+                    child: Icon(Icons.copy, size: 14),
+                  ),
+                ),
+              ),
               if (m.hostname.isNotEmpty) _kv(context, '主机', m.hostname),
               if (m.os.isNotEmpty) _kv(context, '系统', m.os),
               if (m.cpuModel.isNotEmpty)
-                _kv(context, 'CPU',
-                    '${m.cpuCores > 0 ? '${m.cpuCores}核 ' : ''}${m.cpuModel}'),
+                _kv(
+                  context,
+                  'CPU',
+                  '${m.cpuCores > 0 ? '${m.cpuCores}核 ' : ''}${m.cpuModel}',
+                ),
               _kv(context, '运行', formatDuration(m.uptimeSeconds)),
-              _kv(context, '负载',
-                  m.load.map((e) => e.toStringAsFixed(2)).join(', ')),
+              _kv(
+                context,
+                '负载',
+                m.load.map((e) => e.toStringAsFixed(2)).join(', '),
+              ),
             ],
           ),
         ),
@@ -100,7 +119,7 @@ class MonitorPanel extends StatelessWidget {
                 text: m.memTotalKb == 0
                     ? '-'
                     : '${(m.memUsedKb * 100 / m.memTotalKb).toStringAsFixed(0)}%  '
-                        '${formatBytes(m.memUsedKb * 1024)}/${formatBytes(m.memTotalKb * 1024)}',
+                          '${formatBytes(m.memUsedKb * 1024)}/${formatBytes(m.memTotalKb * 1024)}',
               ),
               UsageBar(
                 label: '交换',
@@ -108,7 +127,7 @@ class MonitorPanel extends StatelessWidget {
                 text: m.swapTotalKb == 0
                     ? '未启用'
                     : '${(m.swapUsedKb * 100 / m.swapTotalKb).toStringAsFixed(0)}%  '
-                        '${formatBytes(m.swapUsedKb * 1024)}/${formatBytes(m.swapTotalKb * 1024)}',
+                          '${formatBytes(m.swapUsedKb * 1024)}/${formatBytes(m.swapTotalKb * 1024)}',
               ),
             ],
           ),
@@ -122,19 +141,26 @@ class MonitorPanel extends StatelessWidget {
               Row(
                 children: [
                   Text('网络', style: theme.textTheme.labelMedium),
+                  const SizedBox(width: 8),
                   const Spacer(),
                   if (m.interfaces.isNotEmpty)
-                    AppSelect<String>(
-                      dense: true,
-                      width: 118,
-                      value: m.interfaces.contains(m.selectedIface)
-                          ? m.selectedIface
-                          : '',
-                      options: [
-                        (value: '', label: '全部网卡'),
-                        for (final i in m.interfaces) (value: i, label: i),
-                      ],
-                      onChanged: m.selectIface,
+                    Flexible(
+                      flex: 100,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 118),
+                        child: AppSelect<String>(
+                          dense: true,
+                          width: double.infinity,
+                          value: m.interfaces.contains(m.selectedIface)
+                              ? m.selectedIface
+                              : '',
+                          options: [
+                            (value: '', label: '全部网卡'),
+                            for (final i in m.interfaces) (value: i, label: i),
+                          ],
+                          onChanged: m.selectIface,
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -144,23 +170,29 @@ class MonitorPanel extends StatelessWidget {
                   Icon(Icons.arrow_upward, size: 13, color: up),
                   const SizedBox(width: 2),
                   Expanded(
-                    child: Text(formatSpeed(m.txRate < 0 ? 0 : m.txRate),
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: up)),
+                    child: Text(
+                      formatSpeed(m.txRate < 0 ? 0 : m.txRate),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: up,
+                      ),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Icon(Icons.arrow_downward, size: 13, color: down),
                   const SizedBox(width: 2),
                   Expanded(
-                    child: Text(formatSpeed(m.rxRate < 0 ? 0 : m.rxRate),
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: down)),
+                    child: Text(
+                      formatSpeed(m.rxRate < 0 ? 0 : m.rxRate),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: down,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -186,23 +218,28 @@ class MonitorPanel extends StatelessWidget {
                 children: [
                   Text('延迟', style: theme.textTheme.labelMedium),
                   const Spacer(),
-                  Text(m.pingMs == null ? '超时' : '${m.pingMs} ms',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: m.pingMs == null
-                              ? const Color(0xFFE5484D)
-                              : m.pingMs! > 200
-                                  ? up
-                                  : down)),
+                  Text(
+                    m.pingMs == null ? '超时' : '${m.pingMs} ms',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: m.pingMs == null
+                          ? const Color(0xFFE5484D)
+                          : m.pingMs! > 200
+                          ? up
+                          : down,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
               MiniLineChart(
                 series: [
-                  ChartSeries(m.pingHistory.map((e) => e?.toDouble()).toList(),
-                      cs.primary,
-                      fill: false),
+                  ChartSeries(
+                    m.pingHistory.map((e) => e?.toDouble()).toList(),
+                    cs.primary,
+                    fill: false,
+                  ),
                 ],
                 height: 50,
                 minMax: 50,
@@ -220,12 +257,15 @@ class MonitorPanel extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                      child: Text('进程', style: theme.textTheme.labelMedium)),
+                    child: Text('进程', style: theme.textTheme.labelMedium),
+                  ),
                   InkWell(
                     onTap: () => showProcessManager(context, m),
                     borderRadius: BorderRadius.circular(6),
-                    child: Text('全部进程',
-                        style: TextStyle(fontSize: 12, color: cs.primary)),
+                    child: Text(
+                      '全部进程',
+                      style: TextStyle(fontSize: 12, color: cs.primary),
+                    ),
                   ),
                 ],
               ),
@@ -240,21 +280,31 @@ class MonitorPanel extends StatelessWidget {
                   TableRow(
                     children: [
                       for (final h in ['内存', 'CPU', '命令'])
-                        Text(h,
-                            style: TextStyle(
-                                fontSize: 11, color: theme.hintColor)),
+                        Text(
+                          h,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: theme.hintColor,
+                          ),
+                        ),
                     ],
                   ),
                   for (final p in topProcs.take(6))
                     TableRow(
                       children: [
-                        Text(formatBytes(p.rssKb * 1024),
-                            style: const TextStyle(fontSize: 11)),
-                        Text(p.cpu.toStringAsFixed(1),
-                            style: const TextStyle(fontSize: 11)),
-                        Text(p.command,
-                            style: const TextStyle(fontSize: 11),
-                            overflow: TextOverflow.ellipsis),
+                        Text(
+                          formatBytes(p.rssKb * 1024),
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        Text(
+                          p.cpu.toStringAsFixed(1),
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        Text(
+                          p.command,
+                          style: const TextStyle(fontSize: 11),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                 ],
@@ -273,7 +323,8 @@ class MonitorPanel extends StatelessWidget {
                 const SizedBox(height: 4),
                 for (final d in m.disks)
                   Tooltip(
-                    message: '${d.filesystem}\n已用 ${formatBytes(d.usedKb * 1024)}，'
+                    message:
+                        '${d.filesystem}\n已用 ${formatBytes(d.usedKb * 1024)}，'
                         '可用 ${formatBytes(d.availKb * 1024)}',
                     child: UsageBar(
                       label: d.mount.length > 6
@@ -290,8 +341,10 @@ class MonitorPanel extends StatelessWidget {
         if (m.error != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: Text('监控出错：${m.error}',
-                style: const TextStyle(fontSize: 11, color: Color(0xFFE5484D))),
+            child: Text(
+              '监控出错：${m.error}',
+              style: const TextStyle(fontSize: 11, color: Color(0xFFE5484D)),
+            ),
           ),
       ],
     );
@@ -325,10 +378,12 @@ class _ProcessManagerState extends State<_ProcessManager> {
   String _filter = '';
 
   Future<void> _kill(ProcessInfo p, String sig) async {
-    final ok = await confirm(context,
-        title: '结束进程',
-        message: '确定向进程 ${p.pid} (${p.command}) 发送 SIG$sig 信号吗？',
-        danger: true);
+    final ok = await confirm(
+      context,
+      title: '结束进程',
+      message: '确定向进程 ${p.pid} (${p.command}) 发送 SIG$sig 信号吗？',
+      danger: true,
+    );
     if (!ok) return;
     try {
       await widget.monitor.killProcess(p.pid, signal: sig);
@@ -344,52 +399,59 @@ class _ProcessManagerState extends State<_ProcessManager> {
       listenable: widget.monitor,
       builder: (context, _) {
         var list = widget.monitor.processes
-            .where((p) =>
-                _filter.isEmpty ||
-                p.command.toLowerCase().contains(_filter) ||
-                p.user.toLowerCase().contains(_filter) ||
-                '${p.pid}' == _filter)
+            .where(
+              (p) =>
+                  _filter.isEmpty ||
+                  p.command.toLowerCase().contains(_filter) ||
+                  p.user.toLowerCase().contains(_filter) ||
+                  '${p.pid}' == _filter,
+            )
             .toList();
         int cmp(ProcessInfo a, ProcessInfo b) => switch (_sortCol) {
-              0 => a.pid.compareTo(b.pid),
-              1 => a.user.compareTo(b.user),
-              2 => a.cpu.compareTo(b.cpu),
-              3 => a.rssKb.compareTo(b.rssKb),
-              _ => a.command.compareTo(b.command),
-            };
+          0 => a.pid.compareTo(b.pid),
+          1 => a.user.compareTo(b.user),
+          2 => a.cpu.compareTo(b.cpu),
+          3 => a.rssKb.compareTo(b.rssKb),
+          _ => a.command.compareTo(b.command),
+        };
         list.sort((a, b) => _asc ? cmp(a, b) : cmp(b, a));
         DataColumn col(String t, int i, {bool num = false}) => DataColumn(
-              label: Text(t),
-              numeric: num,
-              onSort: (_, _) => setState(() {
-                if (_sortCol == i) {
-                  _asc = !_asc;
-                } else {
-                  _sortCol = i;
-                  _asc = false;
-                }
-              }),
-            );
+          label: Text(t),
+          numeric: num,
+          onSort: (_, _) => setState(() {
+            if (_sortCol == i) {
+              _asc = !_asc;
+            } else {
+              _sortCol = i;
+              _asc = false;
+            }
+          }),
+        );
         return Column(
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
               child: Row(
                 children: [
-                  Text('进程管理 (${list.length})',
-                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    '进程管理 (${list.length})',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: TextField(
                       decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.search, size: 18),
-                          hintText: '按命令、用户或 PID 过滤'),
-                      onChanged: (v) => setState(() => _filter = v.trim().toLowerCase()),
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        hintText: '按命令、用户或 PID 过滤',
+                      ),
+                      onChanged: (v) =>
+                          setState(() => _filter = v.trim().toLowerCase()),
                     ),
                   ),
                   IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close)),
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
                 ],
               ),
             ),
@@ -413,27 +475,41 @@ class _ProcessManagerState extends State<_ProcessManager> {
                     ],
                     rows: [
                       for (final p in list.take(300))
-                        DataRow(cells: [
-                          DataCell(Text('${p.pid}')),
-                          DataCell(Text(p.user)),
-                          DataCell(Text(p.cpu.toStringAsFixed(1))),
-                          DataCell(Text(formatBytes(p.rssKb * 1024))),
-                          DataCell(SizedBox(
-                              width: 260,
-                              child: Text(p.command, overflow: TextOverflow.ellipsis))),
-                          DataCell(Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              TextButton(
-                                  onPressed: () => _kill(p, 'TERM'),
-                                  child: const Text('结束')),
-                              TextButton(
-                                  onPressed: () => _kill(p, 'KILL'),
-                                  child: const Text('强制结束',
-                                      style: TextStyle(color: Colors.red))),
-                            ],
-                          )),
-                        ]),
+                        DataRow(
+                          cells: [
+                            DataCell(Text('${p.pid}')),
+                            DataCell(Text(p.user)),
+                            DataCell(Text(p.cpu.toStringAsFixed(1))),
+                            DataCell(Text(formatBytes(p.rssKb * 1024))),
+                            DataCell(
+                              SizedBox(
+                                width: 260,
+                                child: Text(
+                                  p.command,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ),
+                            DataCell(
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: () => _kill(p, 'TERM'),
+                                    child: const Text('结束'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () => _kill(p, 'KILL'),
+                                    child: const Text(
+                                      '强制结束',
+                                      style: TextStyle(color: Colors.red),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                     ],
                   ),
                 ),

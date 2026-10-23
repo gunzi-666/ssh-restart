@@ -22,6 +22,14 @@ class AppSettings {
   bool sftpShowHidden;
   bool confirmOnCloseTab;
 
+  /// 首页左侧分组栏宽度与已展开的分组，仅保存在本机。
+  double sidebarWidth;
+  List<String> expandedGroups;
+
+  /// 桌面端窗口位置与大小 [x, y, 宽, 高]（未最大化时的尺寸），仅保存在本机。
+  List<double> windowBounds;
+  bool windowMaximized;
+
   String backupKey;
   bool rememberBackupKey;
 
@@ -55,6 +63,10 @@ class AppSettings {
     this.sftpFollowTerminal = false,
     this.sftpShowHidden = false,
     this.confirmOnCloseTab = true,
+    this.sidebarWidth = 232,
+    List<String>? expandedGroups,
+    List<double>? windowBounds,
+    this.windowMaximized = false,
     this.backupKey = '',
     this.rememberBackupKey = true,
     this.gdriveClientId = '',
@@ -69,7 +81,8 @@ class AppSettings {
     this.lastUploadAt = 0,
     this.lastImportedRemoteId = '',
     this.lastImportedRemoteTime = 0,
-  });
+  })  : expandedGroups = expandedGroups ?? [],
+        windowBounds = windowBounds ?? [];
 
   Map<String, dynamic> toJson() => {
         'themeMode': themeMode.name,
@@ -88,6 +101,10 @@ class AppSettings {
         'sftpFollowTerminal': sftpFollowTerminal,
         'sftpShowHidden': sftpShowHidden,
         'confirmOnCloseTab': confirmOnCloseTab,
+        'sidebarWidth': sidebarWidth,
+        'expandedGroups': expandedGroups,
+        'windowBounds': windowBounds,
+        'windowMaximized': windowMaximized,
         'backupKey': rememberBackupKey ? backupKey : '',
         'rememberBackupKey': rememberBackupKey,
         'gdriveClientId': gdriveClientId,
@@ -161,6 +178,12 @@ class AppSettings {
         sftpFollowTerminal: j['sftpFollowTerminal'] as bool? ?? false,
         sftpShowHidden: j['sftpShowHidden'] as bool? ?? false,
         confirmOnCloseTab: j['confirmOnCloseTab'] as bool? ?? true,
+        sidebarWidth: (j['sidebarWidth'] as num?)?.toDouble() ?? 232,
+        expandedGroups: (j['expandedGroups'] as List?)?.cast<String>().toList(),
+        windowBounds: (j['windowBounds'] as List?)
+            ?.map((e) => (e as num).toDouble())
+            .toList(),
+        windowMaximized: j['windowMaximized'] as bool? ?? false,
         backupKey: j['backupKey'] as String? ?? '',
         rememberBackupKey: j['rememberBackupKey'] as bool? ?? true,
         gdriveClientId: j['gdriveClientId'] as String? ?? '',

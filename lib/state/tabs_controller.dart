@@ -29,6 +29,19 @@ class TabsController extends ChangeNotifier {
     return tab;
   }
 
+  /// 在后台建立 SSH 连接但暂不加入标签栏，连接成功后由调用方 [attach]。
+  SshTab connectInBackground(SessionConfig config) {
+    final tab = SshTab(config.copy(), store)..progressViewer = true;
+    tab.connect();
+    return tab;
+  }
+
+  void attach(AppTab tab) {
+    if (!tabs.contains(tab)) tabs.add(tab);
+    activeIndex = tabs.indexOf(tab);
+    notifyListeners();
+  }
+
   /// 复制标签：用同一会话配置再开一个新连接。
   AppTab duplicate(AppTab tab) => open(tab.config);
 

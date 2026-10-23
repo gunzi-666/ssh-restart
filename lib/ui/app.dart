@@ -7,8 +7,20 @@ import '../services/app_store.dart';
 import '../services/ssh/ssh_connector.dart';
 import 'app_style.dart';
 import 'home_page.dart';
+import 'unlock_page.dart';
+import 'widgets/shad.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
+
+class _LockGate extends StatelessWidget {
+  const _LockGate();
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = context.select<AppStore, bool>((s) => s.locked);
+    return locked ? const UnlockPage() : const HomePage();
+  }
+}
 
 class SshRestartApp extends StatefulWidget {
   const SshRestartApp({super.key});
@@ -26,74 +38,89 @@ class _SshRestartAppState extends State<SshRestartApp> {
   }
 
   Future<bool> _hostKeyPrompt(
-      String host, String type, String fp, String? known) async {
+    String host,
+    String type,
+    String fp,
+    String? known,
+  ) async {
     final ctx = navigatorKey.currentContext;
     if (ctx == null) return true;
     final changed = known != null;
     final r = await showDialog<bool>(
       context: ctx,
       barrierDismissible: false,
-      builder: (c) => AlertDialog(
-        icon: Icon(changed ? Icons.warning_amber : Icons.vpn_key,
-            color: changed ? Colors.red : null),
-        title: Text(changed ? '主机指纹已变化！' : '首次连接该主机'),
-        content: SizedBox(
-          width: 480,
-          child: SelectableText(
-            changed
-                ? '主机 $host 的指纹与之前记录的不一致，可能存在中间人攻击，也可能是服务器重装过系统。\n\n'
-                    '之前记录：$known\n当前指纹：$fp\n类型：$type\n\n确定继续连接并更新记录吗？'
-                : '主机：$host\n类型：$type\n指纹：$fp\n\n是否信任该主机并继续连接？',
-          ),
-        ),
+      builder: (c) => AppDialog(
+        title: changed ? '主机指纹已变化' : '首次连接该主机',
+        description: changed
+            ? '主机指纹与之前记录的不一致，可能存在中间人攻击，也可能是服务器重装过系统。确认无误后再继续。'
+            : '请核对指纹后确认是否信任。信任后会记住该指纹，下次不再询问。',
+        width: 520,
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
-          FilledButton(
-            style: changed
-                ? FilledButton.styleFrom(backgroundColor: Colors.red)
-                : null,
+          AppButton(label: '取消', onPressed: () => Navigator.pop(c, false)),
+          AppButton(
+            label: changed ? '仍然连接' : '信任并连接',
+            primary: !changed,
+            danger: changed,
             onPressed: () => Navigator.pop(c, true),
-            child: Text(changed ? '仍然连接' : '信任并连接'),
           ),
         ],
+        child: SelectableText(
+          changed
+              ? '主机：$host\n类型：$type\n之前记录：$known\n当前指纹：$fp'
+              : '主机：$host\n类型：$type\n指纹：$fp',
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontFamilyFallback: ['Consolas', 'Menlo', 'Cascadia Mono'],
+            fontSize: 12.5,
+            height: 1.6,
+          ),
+        ),
       ),
     );
     return r ?? false;
   }
 
   Future<List<String>?> _interactivePrompt(
-      String title, List<String> prompts) async {
+    String title,
+    List<String> prompts,
+  ) async {
     final ctx = navigatorKey.currentContext;
     if (ctx == null) return null;
     final ctrls = prompts.map((_) => TextEditingController()).toList();
     final ok = await showDialog<bool>(
       context: ctx,
       barrierDismissible: false,
-      builder: (c) => AlertDialog(
-        title: Text(title),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < prompts.length; i++)
-                TextField(
-                  controller: ctrls[i],
-                  autofocus: i == 0,
-                  obscureText: prompts[i].toLowerCase().contains('password') ||
-                      prompts[i].contains('密码'),
-                  decoration: InputDecoration(labelText: prompts[i].trim()),
-                ),
-            ],
-          ),
-        ),
+      builder: (c) => AppDialog(
+        title: title,
+        width: 420,
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(c, false), child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(c, true), child: const Text('确定')),
+          AppButton(label: '取消', onPressed: () => Navigator.pop(c, false)),
+          AppButton(
+            label: '确定',
+            primary: true,
+            onPressed: () => Navigator.pop(c, true),
+          ),
         ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < prompts.length; i++)
+              Padding(
+                padding: EdgeInsets.only(top: i == 0 ? 0 : 10),
+                child: LabeledField(
+                  label: prompts[i].trim(),
+                  child: TextField(
+                    controller: ctrls[i],
+                    autofocus: i == 0,
+                    obscureText:
+                        prompts[i].toLowerCase().contains('password') ||
+                        prompts[i].contains('密码'),
+                    onSubmitted: (_) => Navigator.pop(c, true),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
     if (ok != true) return null;
@@ -103,7 +130,8 @@ class _SshRestartAppState extends State<SshRestartApp> {
   @override
   Widget build(BuildContext context) {
     final settings = context.select<AppStore, (AppThemeMode, int, String)>(
-        (s) => (s.settings.themeMode, s.settings.accentColor, s.settings.uiStyle));
+      (s) => (s.settings.themeMode, s.settings.accentColor, s.settings.uiStyle),
+    );
     final mode = switch (settings.$1) {
       AppThemeMode.light => ThemeMode.light,
       AppThemeMode.dark => ThemeMode.dark,
@@ -125,7 +153,7 @@ class _SshRestartAppState extends State<SshRestartApp> {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      home: const HomePage(),
+      home: const _LockGate(),
     );
   }
 }

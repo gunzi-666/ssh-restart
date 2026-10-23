@@ -12,7 +12,7 @@ import 'command_panels.dart';
 import 'session_editor.dart';
 import 'widgets/common.dart';
 
-enum _Scope { all, favorites, recent, group, ungrouped }
+enum _Scope { all, favorites, recent, group, ungrouped, session }
 
 enum _TypeFilter { all, ssh, vnc, favorite }
 
@@ -46,10 +46,12 @@ class ServerHomeView extends StatefulWidget {
   const ServerHomeView({
     super.key,
     required this.onConnect,
+    required this.onConnectMany,
     required this.onOpenSettings,
   });
 
   final void Function(SessionConfig s) onConnect;
+  final void Function(List<SessionConfig> list) onConnectMany;
   final void Function(int tab) onOpenSettings;
 
   @override
@@ -59,23 +61,36 @@ class ServerHomeView extends StatefulWidget {
 class _ServerHomeViewState extends State<ServerHomeView> {
   static const double _rowH = 54;
   static const double _headerH = 40;
-  static const double _footerH = 56;
   static const double _cardW = 272;
   static const double _cardH = 164;
   static const double _gap = 12;
   static const double _actionsW = 176;
+  static const double _minSidebarW = 180;
+  static const double _maxSidebarW = 420;
+  static const double _checkW = 36;
+
+  /// 拖动中的侧边栏宽度；松手后写入设置。
+  final _dragW = ValueNotifier<double?>(null);
+
+  /// 按下时的宽度与累计位移；按总位移计算宽度，同一帧内的多次事件不会丢失。
+  double _dragStartW = 0;
+  double _dragDx = 0;
+
+  /// 多选勾选的服务器 id。
+  final Set<String> _checked = {};
 
   final _search = TextEditingController();
   final _searchFocus = FocusNode();
 
   _Scope _scope = _Scope.all;
   String? _groupId;
+  String? _sessionId;
   _TypeFilter _type = _TypeFilter.all;
   AuthType? _auth;
   _SortKey _sort = _SortKey.added;
   bool _asc = true;
   bool _grid = false;
-  int _page = 0;
+  final _scroll = ScrollController();
   String? _selectedId;
 
   /// 新建/复制后需要自动翻到其所在页的服务器。
@@ -92,15 +107,18 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   void dispose() {
     _search.dispose();
     _searchFocus.dispose();
+    _dragW.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
   void _update(VoidCallback fn) => setState(() {
-        fn();
-        _page = 0;
-      });
+    fn();
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  });
 
-  void _setScope(_Scope scope, {String? groupId}) => _update(() {
+  void _setScope(_Scope scope, {String? groupId, String? sessionId}) =>
+      _update(() {
         if (scope == _Scope.recent) {
           _sort = _SortKey.recent;
           _asc = false;
@@ -110,12 +128,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         }
         _scope = scope;
         _groupId = groupId;
+        _sessionId = sessionId;
       });
 
   void _focusSearch() {
     _searchFocus.requestFocus();
-    _search.selection =
-        TextSelection(baseOffset: 0, extentOffset: _search.text.length);
+    _search.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _search.text.length,
+    );
   }
 
   // ---------------- 数据筛选 ----------------
@@ -127,7 +148,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     while (frontier.isNotEmpty && guard++ < 50) {
       final next = <String>[];
       for (final g in groups) {
-        if (g.parentId != null && frontier.contains(g.parentId) && out.add(g.id)) {
+        if (g.parentId != null &&
+            frontier.contains(g.parentId) &&
+            out.add(g.id)) {
           next.add(g.id);
         }
       }
@@ -153,6 +176,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         list = list.where((s) => ids.contains(s.groupId)).toList();
       case _Scope.ungrouped:
         list = list.where(_isUngrouped).toList();
+      case _Scope.session:
+        list = list.where((s) => s.id == _sessionId).toList();
     }
     switch (_type) {
       case _TypeFilter.all:
@@ -172,11 +197,13 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     final q = _search.text.trim().toLowerCase();
     if (q.isNotEmpty) {
       list = list
-          .where((s) =>
-              s.displayName.toLowerCase().contains(q) ||
-              s.host.toLowerCase().contains(q) ||
-              s.username.toLowerCase().contains(q) ||
-              s.description.toLowerCase().contains(q))
+          .where(
+            (s) =>
+                s.displayName.toLowerCase().contains(q) ||
+                s.host.toLowerCase().contains(q) ||
+                s.username.toLowerCase().contains(q) ||
+                s.description.toLowerCase().contains(q),
+          )
           .toList();
     }
     int cmp(SessionConfig a, SessionConfig b) {
@@ -185,9 +212,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           final c = a.createdAt.compareTo(b.createdAt);
           return c != 0 ? c : a.id.compareTo(b.id);
         case _SortKey.name:
-          return a.displayName
-              .toLowerCase()
-              .compareTo(b.displayName.toLowerCase());
+          return a.displayName.toLowerCase().compareTo(
+            b.displayName.toLowerCase(),
+          );
         case _SortKey.address:
           final c = a.host.compareTo(b.host);
           return c != 0 ? c : a.port.compareTo(b.port);
@@ -226,6 +253,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         return g == null ? '分组' : _groupPath(g);
       case _Scope.ungrouped:
         return '未分组';
+      case _Scope.session:
+        return store.sessionById(_sessionId ?? '')?.displayName ?? '服务器';
     }
   }
 
@@ -275,40 +304,54 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   }
 
   Future<void> _delete(SessionConfig s) async {
-    if (await confirm(context,
-        title: '删除服务器',
-        message: '确定删除“${s.displayName}”吗？',
-        danger: true)) {
+    if (await confirm(
+      context,
+      title: '删除服务器',
+      message: '确定删除“${s.displayName}”吗？',
+      danger: true,
+    )) {
       store.deleteSession(s.id);
     }
   }
 
   Future<void> _moveTo(SessionConfig s) async {
+    final target = await _pickGroup(
+      description: '选择“${s.displayName}”要移动到的分组。',
+      current: s.groupId ?? '',
+    );
+    if (target == null) return;
+    s.groupId = target.isEmpty ? null : target;
+    store.upsertSession(s);
+  }
+
+  /// 返回选中的分组 id，空字符串表示未分组，取消返回 null。
+  Future<String?> _pickGroup({required String description, String? current}) {
     final groups = store.groups;
     Widget option(BuildContext ctx, String id, String label, IconData icon) {
-      final current = (s.groupId ?? '') == id;
+      final isCurrent = current == id;
       return AppMenuItem(
         height: 38,
         icon: icon,
         label: label,
-        selected: current,
-        trailing: current
-            ? Icon(Icons.check_rounded,
-                size: 16, color: Theme.of(ctx).colorScheme.onSurface)
+        selected: isCurrent,
+        trailing: isCurrent
+            ? Icon(
+                Icons.check_rounded,
+                size: 16,
+                color: Theme.of(ctx).colorScheme.onSurface,
+              )
             : null,
         onTap: () => Navigator.pop(ctx, id),
       );
     }
 
-    final target = await showDialog<String>(
+    return showDialog<String>(
       context: context,
       builder: (ctx) => AppDialog(
         title: '移动到分组',
-        description: '选择“${s.displayName}”要移动到的分组。',
+        description: description,
         width: 420,
-        actions: [
-          AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
-        ],
+        actions: [AppButton(label: '取消', onPressed: () => Navigator.pop(ctx))],
         child: Container(
           constraints: const BoxConstraints(maxHeight: 320),
           padding: const EdgeInsets.all(4),
@@ -327,44 +370,48 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         ),
       ),
     );
-    if (target == null) return;
-    s.groupId = target.isEmpty ? null : target;
-    store.upsertSession(s);
   }
 
   Future<void> _newGroup({String? parentId}) async {
-    final name = await promptText(context,
-        title: '新建分组',
-        description: '分组用于整理服务器，可在左侧拖拽服务器到分组中。',
-        label: '分组名称',
-        hint: '例如：生产环境',
-        okText: '创建');
+    final name = await promptText(
+      context,
+      title: '新建分组',
+      description: '分组用于整理服务器，可在左侧拖拽服务器到分组中。',
+      label: '分组名称',
+      hint: '例如：生产环境',
+      okText: '创建',
+    );
     if (name == null || name.trim().isEmpty) return;
     store.upsertGroup(SessionGroup(name: name.trim(), parentId: parentId));
+    if (parentId != null) _toggleExpanded(parentId, open: true);
   }
 
   Future<void> _renameGroup(SessionGroup g) async {
-    final name = await promptText(context,
-        title: '重命名分组',
-        initial: g.name,
-        label: '分组名称',
-        okText: '保存');
+    final name = await promptText(
+      context,
+      title: '重命名分组',
+      initial: g.name,
+      label: '分组名称',
+      okText: '保存',
+    );
     if (name == null || name.trim().isEmpty) return;
     g.name = name.trim();
     store.upsertGroup(g);
   }
 
   Future<void> _deleteGroup(SessionGroup g) async {
-    if (await confirm(context,
-        title: '删除分组',
-        message: '删除分组“${g.name}”后，其中的服务器会移动到上级分组。',
-        danger: true)) {
+    if (await confirm(
+      context,
+      title: '删除分组',
+      message: '删除分组“${g.name}”后，其中的服务器会移动到上级分组。',
+      danger: true,
+    )) {
       store.deleteGroup(g.id);
       if (_scope == _Scope.group && _groupId == g.id) _setScope(_Scope.all);
     }
   }
 
-  void _copyInfo(SessionConfig s) {
+  String _infoText(SessionConfig s) {
     final lines = <String>['IP：${s.host}', '端口：${s.port}'];
     if (s.type == SessionType.ssh) {
       lines.add('用户名：${s.username}');
@@ -372,31 +419,47 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     } else if (s.password.isNotEmpty) {
       lines.add('密码：${s.password}');
     }
-    copyText(context, lines.join('\n'), tip: '已复制连接信息');
+    return lines.join('\n');
   }
+
+  void _copyInfo(SessionConfig s) =>
+      copyText(context, _infoText(s), tip: '已复制连接信息');
 
   Future<void> _sessionMenu(SessionConfig s, Offset pos) async {
     setState(() => _selectedId = s.id);
     final r = await showAppMenu<String>(context, pos, [
       const AppMenuEntry('connect', '连接', icon: Icons.play_arrow_rounded),
-      AppMenuEntry('fav', s.favorite ? '取消收藏' : '收藏',
-          icon: s.favorite ? Icons.star_rounded : Icons.star_outline_rounded),
+      AppMenuEntry(
+        'check',
+        _checked.contains(s.id) ? '取消勾选' : '勾选（多选）',
+        icon: Icons.check_box_outlined,
+      ),
+      AppMenuEntry(
+        'fav',
+        s.favorite ? '取消收藏' : '收藏',
+        icon: s.favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+      ),
       const AppMenuEntry.divider(),
       const AppMenuEntry('edit', '编辑', icon: Icons.edit_outlined),
       const AppMenuEntry('dup', '复制服务器', icon: Icons.control_point_duplicate),
-      const AppMenuEntry('move', '移动到分组',
-          icon: Icons.drive_file_move_outline),
+      const AppMenuEntry('move', '移动到分组', icon: Icons.drive_file_move_outline),
       const AppMenuEntry.divider(),
       const AppMenuEntry('copyInfo', '复制连接信息', icon: Icons.copy_rounded),
       const AppMenuEntry('copyHost', '复制地址', icon: Icons.link_rounded),
       const AppMenuEntry.divider(),
-      const AppMenuEntry('delete', '删除',
-          icon: Icons.delete_outline_rounded, danger: true),
+      const AppMenuEntry(
+        'delete',
+        '删除',
+        icon: Icons.delete_outline_rounded,
+        danger: true,
+      ),
     ]);
     if (!mounted) return;
     switch (r) {
       case 'connect':
         widget.onConnect(s);
+      case 'check':
+        _toggleChecked(s.id);
       case 'fav':
         store.toggleFavorite(s.id);
       case 'edit':
@@ -419,8 +482,12 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       AppMenuEntry('sub', '新建子分组', icon: Icons.create_new_folder_outlined),
       AppMenuEntry('rename', '重命名', icon: Icons.drive_file_rename_outline),
       AppMenuEntry.divider(),
-      AppMenuEntry('delete', '删除分组',
-          icon: Icons.delete_outline_rounded, danger: true),
+      AppMenuEntry(
+        'delete',
+        '删除分组',
+        icon: Icons.delete_outline_rounded,
+        danger: true,
+      ),
     ]);
     if (!mounted) return;
     switch (r) {
@@ -433,20 +500,36 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     }
   }
 
-  /// 单击选中、双击连接；自行判定双击，避免单击选中被双击识别延迟。
-  void _tapSession(SessionConfig s) {
+  /// 自行判定双击，避免单击响应被双击识别延迟。
+  bool _isDoubleTap(String key) {
     final now = DateTime.now();
-    if (_lastTapId == s.id &&
+    final hit =
+        _lastTapId == key &&
         _lastTapAt != null &&
-        now.difference(_lastTapAt!) < const Duration(milliseconds: 350)) {
-      _lastTapAt = null;
+        now.difference(_lastTapAt!) < const Duration(milliseconds: 350);
+    _lastTapId = key;
+    _lastTapAt = hit ? null : now;
+    return hit;
+  }
+
+  /// 单击选中、双击连接；按住 Ctrl / ⌘ 单击切换勾选。
+  void _tapSession(SessionConfig s) {
+    final kb = HardwareKeyboard.instance;
+    if (kb.isControlPressed || kb.isMetaPressed) {
+      _toggleChecked(s.id);
+      return;
+    }
+    if (_isDoubleTap(s.id)) {
       widget.onConnect(s);
       return;
     }
-    _lastTapId = s.id;
-    _lastTapAt = now;
     setState(() => _selectedId = s.id);
   }
+
+  void _toggleChecked(String id, [bool? value]) => setState(() {
+    final want = value ?? !_checked.contains(id);
+    want ? _checked.add(id) : _checked.remove(id);
+  });
 
   void _openQuickCommands() {
     showDialog(
@@ -462,12 +545,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                 padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
                 child: Row(
                   children: [
-                    Text('快捷命令',
-                        style: Theme.of(ctx).textTheme.titleMedium),
+                    Text('快捷命令', style: Theme.of(ctx).textTheme.titleMedium),
                     const SizedBox(width: 10),
-                    Text('点击复制命令，连接后可在底部「快速命令」中发送',
-                        style: TextStyle(
-                            fontSize: 12, color: Theme.of(ctx).hintColor)),
+                    Text(
+                      '点击复制命令，连接后可在底部「快速命令」中发送',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(ctx).hintColor,
+                      ),
+                    ),
                     const Spacer(),
                     IconButton(
                       onPressed: () => Navigator.pop(ctx),
@@ -494,12 +580,21 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   @override
   Widget build(BuildContext context) {
     final store = context.watch<AppStore>();
-    if (_scope == _Scope.group && store.groupById(_groupId) == null) {
+    if ((_scope == _Scope.group && store.groupById(_groupId) == null) ||
+        (_scope == _Scope.session &&
+            store.sessionById(_sessionId ?? '') == null)) {
       _scope = _Scope.all;
       _groupId = null;
+      _sessionId = null;
+    }
+    if (_checked.isNotEmpty) {
+      _checked.retainAll(store.sessions.map((s) => s.id));
     }
     return CallbackShortcuts(
       bindings: {
+        if (_checked.isNotEmpty)
+          const SingleActivator(LogicalKeyboardKey.escape): () =>
+              setState(_checked.clear),
         const SingleActivator(LogicalKeyboardKey.keyK, control: true):
             _focusSearch,
         const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
@@ -507,68 +602,114 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       },
       child: Focus(
         autofocus: true,
-        child: Row(
-          children: [
-            _sidebar(store),
-            VerticalDivider(
-                width: 1,
-                color: Theme.of(context).colorScheme.outlineVariant),
-            Expanded(child: _main(store)),
-          ],
+        child: _resizable(
+          store,
+          RepaintBoundary(child: _sidebar(store)),
+          RepaintBoundary(child: _main(store)),
         ),
       ),
     );
   }
 
+  /// 拖动时只更新宽度，两侧内容复用同一个 widget 实例，不会重新 build。
+  Widget _resizable(AppStore store, Widget sidebar, Widget main) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final maxW = math.max(
+          _minSidebarW,
+          math.min(_maxSidebarW, c.maxWidth - 520),
+        );
+        return ValueListenableBuilder<double?>(
+          valueListenable: _dragW,
+          builder: (context, dragW, _) {
+            final w = (dragW ?? store.settings.sidebarWidth)
+                .clamp(_minSidebarW, maxW)
+                .toDouble();
+            return Row(
+              children: [
+                SizedBox(width: w, child: sidebar),
+                DragDivider(
+                  onStart: () {
+                    _dragStartW = w;
+                    _dragDx = 0;
+                  },
+                  onDrag: (d) {
+                    _dragDx += d;
+                    _dragW.value = (_dragStartW + _dragDx).clamp(
+                      _minSidebarW,
+                      maxW,
+                    );
+                  },
+                  onEnd: () {
+                    final v = _dragW.value;
+                    if (v != null) {
+                      store.updateSettings((x) => x.sidebarWidth = v);
+                    }
+                  },
+                ),
+                Expanded(child: main),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   // ---------------- 左侧导航 ----------------
+
+  static const _ungroupedKey = '__ungrouped__';
 
   Widget _sidebar(AppStore store) {
     final cs = Theme.of(context).colorScheme;
     final sessions = store.sessions;
-    final groups = store.groups;
+    final rows = _treeRows(store);
     return Container(
-      width: 232,
       color: cs.surfaceContainerLow,
       child: Column(
         children: [
           Expanded(
-            child: ListView(
+            child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(10, 14, 10, 8),
-              children: [
-                _navItem(
+              itemCount: rows.length + 5,
+              itemBuilder: (context, i) => switch (i) {
+                0 => _navItem(
                   icon: Icons.dns_outlined,
                   label: '所有服务器',
                   count: sessions.length,
                   selected: _scope == _Scope.all,
                   onTap: () => _setScope(_Scope.all),
                 ),
-                _navItem(
+                1 => _navItem(
                   icon: Icons.star_outline_rounded,
                   label: '收藏',
                   count: sessions.where((s) => s.favorite).length,
                   selected: _scope == _Scope.favorites,
                   onTap: () => _setScope(_Scope.favorites),
                 ),
-                _navItem(
+                2 => _navItem(
                   icon: Icons.history,
                   label: '最近连接',
                   count: sessions.where((s) => s.lastConnectedAt > 0).length,
                   selected: _scope == _Scope.recent,
                   onTap: () => _setScope(_Scope.recent),
                 ),
-                Padding(
+                3 => Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   child: Divider(height: 1, color: cs.outlineVariant),
                 ),
-                Padding(
+                4 => Padding(
                   padding: const EdgeInsets.only(left: 10, bottom: 4),
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text('分组',
-                            style: TextStyle(
-                                fontSize: 12.5,
-                                color: cs.onSurfaceVariant)),
+                        child: Text(
+                          '分组',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
                       ),
                       IconButton(
                         tooltip: '新建分组',
@@ -580,19 +721,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                     ],
                   ),
                 ),
-                ..._groupItems(null, 0, groups, sessions),
-                _dropTarget(
-                  groupId: null,
-                  builder: (hover) => _navItem(
-                    icon: Icons.folder_off_outlined,
-                    label: '未分组',
-                    count: sessions.where(_isUngrouped).length,
-                    selected: _scope == _Scope.ungrouped,
-                    highlighted: hover,
-                    onTap: () => _setScope(_Scope.ungrouped),
-                  ),
-                ),
-              ],
+                _ => rows[i - 5](),
+              },
             ),
           ),
           Padding(
@@ -626,12 +756,16 @@ class _ServerHomeViewState extends State<ServerHomeView> {
             padding: const EdgeInsets.fromLTRB(20, 14, 16, 16),
             child: Row(
               children: [
-                Icon(Icons.storage_outlined,
-                    size: 16, color: cs.onSurfaceVariant),
+                Icon(
+                  Icons.storage_outlined,
+                  size: 16,
+                  color: cs.onSurfaceVariant,
+                ),
                 const SizedBox(width: 10),
-                Text('数据保存在本机',
-                    style:
-                        TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                Text(
+                  '数据保存在本机',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
               ],
             ),
           ),
@@ -640,40 +774,166 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     );
   }
 
-  List<Widget> _groupItems(String? parentId, int depth,
-      List<SessionGroup> groups, List<SessionConfig> sessions) {
-    final gs = groups
-        .where((g) =>
-            g.parentId == parentId ||
-            (parentId == null && store.groupById(g.parentId) == null))
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
-    return [
-      for (final g in gs) ...[
-        _dropTarget(
-          groupId: g.id,
-          builder: (hover) {
-            final ids = _descendants(g.id, groups);
-            final selected = _scope == _Scope.group && _groupId == g.id;
-            return _navItem(
-              icon: selected ? Icons.folder_open_outlined : Icons.folder_outlined,
-              label: g.name,
-              count: sessions.where((s) => ids.contains(s.groupId)).length,
-              selected: selected,
-              highlighted: hover,
-              indent: depth * 14.0,
-              onTap: () => _setScope(_Scope.group, groupId: g.id),
-              onSecondaryTapUp: (d) => _groupMenu(g, d.globalPosition),
-            );
+  /// 分组树：文件夹可展开，展开后显示子文件夹和其中服务器（仅名称）。
+  List<Widget Function()> _treeRows(AppStore store) {
+    final groups = store.groups;
+    final groupMap = {for (final g in groups) g.id: g};
+    final subGroups = <String?, List<SessionGroup>>{};
+    for (final g in groups) {
+      final parent = groupMap.containsKey(g.parentId) ? g.parentId : null;
+      subGroups.putIfAbsent(parent, () => []).add(g);
+    }
+    for (final l in subGroups.values) {
+      l.sort((a, b) => a.name.compareTo(b.name));
+    }
+    final direct = <String?, List<SessionConfig>>{};
+    for (final s in store.sessions) {
+      final gid = groupMap.containsKey(s.groupId) ? s.groupId : null;
+      direct.putIfAbsent(gid, () => []).add(s);
+    }
+    for (final l in direct.values) {
+      l.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+
+    final totals = <String, int>{};
+    int total(String id, Set<String> path) {
+      final cached = totals[id];
+      if (cached != null) return cached;
+      if (!path.add(id)) return 0;
+      var n = direct[id]?.length ?? 0;
+      for (final c in subGroups[id] ?? const <SessionGroup>[]) {
+        n += total(c.id, path);
+      }
+      path.remove(id);
+      return totals[id] = n;
+    }
+
+    final expanded = store.settings.expandedGroups.toSet();
+    final rows = <Widget Function()>[];
+
+    void addSessions(List<SessionConfig>? list, int depth) {
+      for (final s in list ?? const <SessionConfig>[]) {
+        rows.add(() => _treeSession(s, depth));
+      }
+    }
+
+    void addGroup(SessionGroup g, int depth, Set<String> path) {
+      if (depth > 8 || !path.add(g.id)) return;
+      final subs = subGroups[g.id] ?? const <SessionGroup>[];
+      final items = direct[g.id];
+      final expandable = subs.isNotEmpty || (items?.isNotEmpty ?? false);
+      final open = expandable && expanded.contains(g.id);
+      final count = total(g.id, {});
+      rows.add(() => _treeGroup(g, depth, count, expandable ? open : null));
+      if (open) {
+        for (final c in subs) {
+          addGroup(c, depth + 1, path);
+        }
+        addSessions(items, depth + 1);
+      }
+      path.remove(g.id);
+    }
+
+    for (final g in subGroups[null] ?? const <SessionGroup>[]) {
+      addGroup(g, 0, {});
+    }
+
+    final ungrouped = direct[null];
+    final ungroupedOpen =
+        (ungrouped?.isNotEmpty ?? false) && expanded.contains(_ungroupedKey);
+    rows.add(
+      () => _dropTarget(
+        groupId: null,
+        builder: (hover) => _navItem(
+          tree: true,
+          icon: Icons.folder_off_outlined,
+          label: '未分组',
+          count: ungrouped?.length ?? 0,
+          selected: _scope == _Scope.ungrouped,
+          highlighted: hover,
+          chevron: (ungrouped?.isNotEmpty ?? false) ? ungroupedOpen : null,
+          onChevron: () => _toggleExpanded(_ungroupedKey),
+          onTap: () {
+            if ((ungrouped?.isNotEmpty ?? false) &&
+                _isDoubleTap('g:$_ungroupedKey')) {
+              _toggleExpanded(_ungroupedKey);
+            }
+            _setScope(_Scope.ungrouped);
           },
         ),
-        if (depth < 6) ..._groupItems(g.id, depth + 1, groups, sessions),
-      ],
-    ];
+      ),
+    );
+    if (ungroupedOpen) addSessions(ungrouped, 1);
+    return rows;
   }
 
-  Widget _dropTarget(
-      {required String? groupId, required Widget Function(bool) builder}) {
+  Widget _treeGroup(SessionGroup g, int depth, int count, bool? open) {
+    return _dropTarget(
+      groupId: g.id,
+      builder: (hover) => _navItem(
+        tree: true,
+        icon: open == true ? Icons.folder_open_rounded : Icons.folder_rounded,
+        iconColor: _folderColor,
+        label: g.name,
+        count: count,
+        selected: _scope == _Scope.group && _groupId == g.id,
+        highlighted: hover,
+        indent: depth * 16.0,
+        chevron: open,
+        onChevron: () => _toggleExpanded(g.id),
+        onTap: () {
+          if (open != null && _isDoubleTap('g:${g.id}')) {
+            _toggleExpanded(g.id);
+          }
+          _setScope(_Scope.group, groupId: g.id);
+        },
+        onSecondaryTapUp: (d) => _groupMenu(g, d.globalPosition),
+      ),
+    );
+  }
+
+  Widget _treeSession(SessionConfig s, int depth) {
+    return _draggable(
+      s,
+      _navItem(
+        tree: true,
+        dense: true,
+        icon: s.type == SessionType.vnc
+            ? Icons.desktop_windows_outlined
+            : Icons.terminal_rounded,
+        label: s.displayName,
+        selected: _scope == _Scope.session && _sessionId == s.id,
+        indent: depth * 16.0,
+        onTap: () {
+          if (_isDoubleTap('s:${s.id}')) {
+            widget.onConnect(s);
+            return;
+          }
+          _setScope(_Scope.session, sessionId: s.id);
+          setState(() => _selectedId = s.id);
+        },
+        onSecondaryTapUp: (d) => _sessionMenu(s, d.globalPosition),
+      ),
+    );
+  }
+
+  static const _folderColor = Color(0xFFE8A93A);
+
+  void _toggleExpanded(String id, {bool? open}) {
+    store.updateSettings((x) {
+      final set = x.expandedGroups.toSet();
+      final want = open ?? !set.contains(id);
+      want ? set.add(id) : set.remove(id);
+      x.expandedGroups = set
+          .where((e) => e == _ungroupedKey || store.groupById(e) != null)
+          .toList();
+    });
+  }
+
+  Widget _dropTarget({
+    required String? groupId,
+    required Widget Function(bool) builder,
+  }) {
     return DragTarget<SessionConfig>(
       onAcceptWithDetails: (d) {
         d.data.groupId = groupId;
@@ -690,45 +950,86 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     bool selected = false,
     bool highlighted = false,
     double indent = 0,
+    bool tree = false,
+    bool dense = false,
+    Color? iconColor,
+    bool? chevron,
+    VoidCallback? onChevron,
     VoidCallback? onTap,
     GestureTapUpCallback? onSecondaryTapUp,
   }) {
     final cs = Theme.of(context).colorScheme;
     final fg = selected ? cs.primary : cs.onSurface;
+    final isTree = tree;
+    final vPad = dense ? 6.0 : (tree ? 8.0 : 9.0);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
         color: highlighted
             ? cs.primary.withValues(alpha: 0.22)
             : selected
-                ? cs.primary.withValues(alpha: 0.13)
-                : Colors.transparent,
+            ? cs.primary.withValues(alpha: 0.13)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           onSecondaryTapUp: onSecondaryTapUp,
           child: Padding(
-            padding: EdgeInsets.fromLTRB(10 + indent, 9, 10, 9),
+            padding: EdgeInsets.fromLTRB(
+              (isTree ? 2 : 10) + indent,
+              vPad,
+              10,
+              vPad,
+            ),
             child: Row(
               children: [
-                Icon(icon,
-                    size: 18,
-                    color: selected ? cs.primary : cs.onSurfaceVariant),
-                const SizedBox(width: 12),
+                if (isTree)
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: chevron == null
+                        ? null
+                        : InkResponse(
+                            radius: 12,
+                            onTap: onChevron,
+                            child: AnimatedRotation(
+                              turns: chevron ? 0.25 : 0,
+                              duration: const Duration(milliseconds: 120),
+                              child: Icon(
+                                Icons.chevron_right_rounded,
+                                size: 18,
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                  ),
+                Icon(
+                  icon,
+                  size: dense ? 15 : 18,
+                  color:
+                      iconColor ??
+                      (selected ? cs.primary : cs.onSurfaceVariant),
+                ),
+                SizedBox(width: isTree ? 8 : 12),
                 Expanded(
-                  child: Text(label,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 13.5,
-                          color: fg,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.w500)),
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: dense ? 13 : 13.5,
+                      color: fg,
+                      fontWeight: selected
+                          ? FontWeight.w600
+                          : (dense ? FontWeight.normal : FontWeight.w500),
+                    ),
+                  ),
                 ),
                 if (count != null)
-                  Text('$count',
-                      style: TextStyle(
-                          fontSize: 12, color: cs.onSurfaceVariant)),
+                  Text(
+                    '$count',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
               ],
             ),
           ),
@@ -754,16 +1055,23 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_scopeTitle(),
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w700,
-                            color: cs.onSurface)),
+                    Text(
+                      _scopeTitle(),
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: cs.onSurface,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text('${list.length} 台服务器',
-                        style: TextStyle(
-                            fontSize: 12.5, color: cs.onSurfaceVariant)),
+                    Text(
+                      '${list.length} 台服务器',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -779,32 +1087,182 @@ class _ServerHomeViewState extends State<ServerHomeView> {
             ],
           ),
           const SizedBox(height: 14),
-          Row(
-            children: [
-              _chip('全部', _type == _TypeFilter.all,
-                  () => _update(() => _type = _TypeFilter.all)),
-              _chip('SSH', _type == _TypeFilter.ssh,
-                  () => _update(() => _type = _TypeFilter.ssh)),
-              if (hasVnc)
-                _chip('VNC', _type == _TypeFilter.vnc,
-                    () => _update(() => _type = _TypeFilter.vnc)),
-              _chip('收藏', _type == _TypeFilter.favorite,
-                  () => _update(() => _type = _TypeFilter.favorite)),
-              const Spacer(),
-              _viewToggle(),
-            ],
+          SizedBox(
+            height: 36,
+            child: _checked.isNotEmpty ? _batchBar(store) : _filterBar(hasVnc),
           ),
           const SizedBox(height: 14),
           Expanded(
             child: list.isEmpty
                 ? _empty(store.sessions.isEmpty)
-                : LayoutBuilder(
-                    builder: (context, c) => _paged(list, c),
-                  ),
+                : LayoutBuilder(builder: (context, c) => _scrollList(list, c)),
           ),
         ],
       ),
     );
+  }
+
+  Widget _filterBar(bool hasVnc) {
+    return Row(
+      children: [
+        _chip(
+          '全部',
+          _type == _TypeFilter.all,
+          () => _update(() => _type = _TypeFilter.all),
+        ),
+        _chip(
+          'SSH',
+          _type == _TypeFilter.ssh,
+          () => _update(() => _type = _TypeFilter.ssh),
+        ),
+        if (hasVnc)
+          _chip(
+            'VNC',
+            _type == _TypeFilter.vnc,
+            () => _update(() => _type = _TypeFilter.vnc),
+          ),
+        _chip(
+          '收藏',
+          _type == _TypeFilter.favorite,
+          () => _update(() => _type = _TypeFilter.favorite),
+        ),
+        const Spacer(),
+        _viewToggle(),
+      ],
+    );
+  }
+
+  List<SessionConfig> _checkedSessions() =>
+      store.sessions.where((s) => _checked.contains(s.id)).toList();
+
+  Widget _batchBar(AppStore store) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.only(left: 12, right: 4),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_box_rounded, size: 18, color: cs.primary),
+          const SizedBox(width: 8),
+          Text(
+            '已选择 ${_checked.length} 台',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurface,
+            ),
+          ),
+          const Spacer(),
+          _batchAction(Icons.play_arrow_rounded, '批量连接', _batchConnect),
+          _batchAction(Icons.content_copy_rounded, '复制连接信息', _batchCopy),
+          _batchAction(Icons.drive_file_move_outline, '移动到分组', _batchMove),
+          _batchAction(
+            Icons.delete_outline_rounded,
+            '删除',
+            _batchDelete,
+            danger: true,
+          ),
+          Container(
+            width: 1,
+            height: 18,
+            margin: const EdgeInsets.symmetric(horizontal: 6),
+            color: cs.outlineVariant,
+          ),
+          _batchAction(
+            Icons.close_rounded,
+            '取消选择',
+            () => setState(_checked.clear),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _batchAction(
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool danger = false,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final color = danger ? cs.error : cs.onSurface;
+    return TextButton.icon(
+      style: TextButton.styleFrom(
+        foregroundColor: color,
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
+      ),
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+    );
+  }
+
+  Future<void> _batchConnect() async {
+    final list = _checkedSessions();
+    if (list.isEmpty) return;
+    if (list.length > 8 &&
+        !await confirm(
+          context,
+          title: '批量连接',
+          message: '将同时打开 ${list.length} 个连接标签，确定继续吗？',
+          okText: '连接',
+        )) {
+      return;
+    }
+    if (!mounted) return;
+    setState(_checked.clear);
+    widget.onConnectMany(list);
+  }
+
+  void _batchCopy() {
+    final list = _checkedSessions();
+    if (list.isEmpty) return;
+    final text = [
+      for (final s in list) '【${s.displayName}】\n${_infoText(s)}',
+    ].join('\n\n');
+    copyText(context, text, tip: '已复制 ${list.length} 台服务器的连接信息');
+  }
+
+  Future<void> _batchMove() async {
+    final list = _checkedSessions();
+    if (list.isEmpty) return;
+    final target = await _pickGroup(
+      description: '选择这 ${list.length} 台服务器要移动到的分组。',
+    );
+    if (target == null) return;
+    for (final s in list) {
+      s.groupId = target.isEmpty ? null : target;
+      store.upsertSession(s);
+    }
+    if (mounted) showToast(context, '已移动 ${list.length} 台服务器');
+  }
+
+  Future<void> _batchDelete() async {
+    final list = _checkedSessions();
+    if (list.isEmpty) return;
+    final names = list.take(5).map((s) => '“${s.displayName}”').join('、');
+    final more = list.length > 5 ? ' 等 ${list.length} 台服务器' : '';
+    if (!await confirm(
+      context,
+      title: '批量删除',
+      message: '确定删除 $names$more 吗？此操作无法撤销。',
+      okText: '删除 ${list.length} 台',
+      danger: true,
+    )) {
+      return;
+    }
+    store.deleteSessions(list.map((s) => s.id));
+    if (!mounted) return;
+    setState(_checked.clear);
+    showToast(context, '已删除 ${list.length} 台服务器');
   }
 
   Widget _newButton() {
@@ -813,8 +1271,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       builder: (context, controller, _) => FilledButton.icon(
         style: FilledButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
         onPressed: () =>
             controller.isOpen ? controller.close() : controller.open(),
@@ -834,8 +1293,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         ),
         MenuItemButton(
           leadingIcon: const Icon(Icons.create_new_folder_outlined, size: 18),
-          onPressed: () => _newGroup(
-              parentId: _scope == _Scope.group ? _groupId : null),
+          onPressed: () =>
+              _newGroup(parentId: _scope == _Scope.group ? _groupId : null),
           child: const Text('分组'),
         ),
       ],
@@ -867,14 +1326,20 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                     widthFactor: 1,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 2),
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(5),
                         border: Border.all(color: cs.outlineVariant),
                       ),
-                      child: Text(_isMac ? '⌘ K' : 'Ctrl K',
-                          style: TextStyle(
-                              fontSize: 11, color: cs.onSurfaceVariant)),
+                      child: Text(
+                        _isMac ? '⌘ K' : 'Ctrl K',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -886,9 +1351,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   Widget _authFilterButton() {
     final cs = Theme.of(context).colorScheme;
     final active = _auth != null;
-    AppMenuEntry<int> item(int v, String label, bool checked) => AppMenuEntry(
-        v, label,
-        icon: checked ? Icons.check_rounded : null);
+    AppMenuEntry<int> item(int v, String label, bool checked) =>
+        AppMenuEntry(v, label, icon: checked ? Icons.check_rounded : null);
     Future<void> open(BuildContext ctx) async {
       final box = ctx.findRenderObject() as RenderBox;
       final pos = box.localToGlobal(Offset(0, box.size.height + 6));
@@ -898,11 +1362,13 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         item(2, '密钥', _auth == AuthType.key),
       ]);
       if (v == null) return;
-      _update(() => _auth = switch (v) {
-            1 => AuthType.password,
-            2 => AuthType.key,
-            _ => null,
-          });
+      _update(
+        () => _auth = switch (v) {
+          1 => AuthType.password,
+          2 => AuthType.key,
+          _ => null,
+        },
+      );
     }
 
     return Builder(
@@ -919,16 +1385,19 @@ class _ServerHomeViewState extends State<ServerHomeView> {
 
   Widget _authFilterBox(ColorScheme cs, bool active) {
     return Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: active ? cs.primary.withValues(alpha: 0.13) : null,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: active ? cs.primary : cs.outlineVariant),
-        ),
-        child: Icon(Icons.filter_list,
-            size: 20, color: active ? cs.primary : cs.onSurfaceVariant),
-      );
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: active ? cs.primary.withValues(alpha: 0.13) : null,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: active ? cs.primary : cs.outlineVariant),
+      ),
+      child: Icon(
+        Icons.filter_list,
+        size: 20,
+        color: active ? cs.primary : cs.onSurfaceVariant,
+      ),
+    );
   }
 
   Widget _chip(String label, bool selected, VoidCallback onTap) {
@@ -948,12 +1417,14 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-            child: Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    color: selected ? cs.primary : cs.onSurface,
-                    fontWeight:
-                        selected ? FontWeight.w600 : FontWeight.normal)),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                color: selected ? cs.primary : cs.onSurface,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
           ),
         ),
       ),
@@ -972,11 +1443,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
               borderRadius: BorderRadius.circular(7),
               onTap: onTap,
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Icon(icon,
-                    size: 18,
-                    color: selected ? cs.onSurface : cs.onSurfaceVariant),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                child: Icon(
+                  icon,
+                  size: 18,
+                  color: selected ? cs.onSurface : cs.onSurfaceVariant,
+                ),
               ),
             ),
           ),
@@ -990,11 +1465,19 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          btn(Icons.view_list_outlined, !_grid, '列表视图',
-              () => _update(() => _grid = false)),
+          btn(
+            Icons.view_list_outlined,
+            !_grid,
+            '列表视图',
+            () => _update(() => _grid = false),
+          ),
           const SizedBox(width: 2),
-          btn(Icons.grid_view_outlined, _grid, '卡片视图',
-              () => _update(() => _grid = true)),
+          btn(
+            Icons.grid_view_outlined,
+            _grid,
+            '卡片视图',
+            () => _update(() => _grid = true),
+          ),
         ],
       ),
     );
@@ -1006,11 +1489,16 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(noSessions ? Icons.dns_outlined : Icons.search_off,
-              size: 48, color: cs.onSurfaceVariant),
+          Icon(
+            noSessions ? Icons.dns_outlined : Icons.search_off,
+            size: 48,
+            color: cs.onSurfaceVariant,
+          ),
           const SizedBox(height: 10),
-          Text(noSessions ? '还没有服务器' : '没有匹配的服务器',
-              style: TextStyle(color: cs.onSurfaceVariant)),
+          Text(
+            noSessions ? '还没有服务器' : '没有匹配的服务器',
+            style: TextStyle(color: cs.onSurfaceVariant),
+          ),
           if (noSessions) ...[
             const SizedBox(height: 14),
             FilledButton.icon(
@@ -1024,88 +1512,157 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     );
   }
 
-  // ---------------- 分页列表 / 卡片 ----------------
+  // ---------------- 列表 / 卡片（单页滚动） ----------------
 
-  Widget _paged(List<SessionConfig> list, BoxConstraints c) {
-    final bodyH = c.maxHeight - _footerH;
-    int pageSize;
-    int cols = 1;
-    if (_grid) {
-      cols = math.max(1, ((c.maxWidth + _gap) / (_cardW + _gap)).floor());
-      final rows = math.max(1, ((bodyH + _gap) / (_cardH + _gap)).floor());
-      pageSize = cols * rows;
-    } else {
-      pageSize = math.max(3, ((bodyH - _headerH - 2) / _rowH).floor());
-    }
-    final pages = math.max(1, (list.length / pageSize).ceil());
+  Widget _scrollList(List<SessionConfig> list, BoxConstraints c) {
+    final cols = _grid
+        ? math.max(1, ((c.maxWidth + _gap) / (_cardW + _gap)).floor())
+        : 1;
     if (_revealId != null) {
       final idx = list.indexWhere((s) => s.id == _revealId);
-      if (idx >= 0) _page = idx ~/ pageSize;
       _revealId = null;
+      if (idx >= 0) _scrollToIndex(idx, cols, c.maxHeight);
     }
-    final page = _page.clamp(0, pages - 1);
-    final start = page * pageSize;
-    final end = math.min(start + pageSize, list.length);
-    final slice = list.sublist(start, end);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: _grid
-                ? _cards(slice, cols)
-                : _table(slice, showAuth: c.maxWidth >= 820),
-          ),
-        ),
-        SizedBox(
-          height: _footerH,
-          child: _pager(start, end, list.length, page, pages),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: _grid
+          ? _cards(list, cols)
+          : _table(list, maxHeight: c.maxHeight - 16),
     );
   }
 
-  Widget _table(List<SessionConfig> rows, {required bool showAuth}) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: cs.outlineVariant),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            height: _headerH,
-            color: cs.surfaceContainerHigh,
-            child: Row(
-              children: [
-                const SizedBox(width: 88),
-                Expanded(flex: 4, child: _headerCell('名称', _SortKey.name)),
-                Expanded(
-                    flex: 4, child: _headerCell('地址', _SortKey.address)),
-                if (showAuth)
-                  SizedBox(width: 100, child: _headerCell('认证', _SortKey.auth)),
-                SizedBox(
-                    width: 120, child: _headerCell('最近连接', _SortKey.recent)),
-                SizedBox(
-                  width: _actionsW,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: Text('操作',
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w500,
-                            color: cs.onSurfaceVariant)),
-                  ),
-                ),
-              ],
-            ),
+  /// 把第 [idx] 项滚动到可见区域（新建 / 复制服务器后定位）。
+  void _scrollToIndex(int idx, int cols, double viewH) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      final pos = _scroll.position;
+      final double top, extent;
+      if (_grid) {
+        top = (idx ~/ cols) * (_cardH + _gap);
+        extent = _cardH;
+      } else {
+        top = idx * _rowH;
+        extent = _rowH;
+      }
+      final view = pos.viewportDimension;
+      double? target;
+      if (top < pos.pixels) {
+        target = top;
+      } else if (top + extent > pos.pixels + view) {
+        target = top + extent - view;
+      }
+      if (target != null) {
+        _scroll.animateTo(
+          target.clamp(0, pos.maxScrollExtent),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Widget _checkbox(
+    bool? value,
+    ValueChanged<bool?> onChanged, {
+    bool tristate = false,
+  }) {
+    return SizedBox(
+      width: _checkW,
+      child: Center(
+        child: Checkbox(
+          value: value,
+          tristate: tristate,
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+          side: BorderSide(
+            width: 1.3,
+            color: Theme.of(context).colorScheme.outline,
           ),
-          for (final s in rows) _row(s, showAuth: showAuth),
-        ],
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+
+  /// 表头复选框作用于当前筛选结果的全部服务器（跨页）。
+  Widget _headerCheckbox(List<SessionConfig> all) {
+    final n = all.where((s) => _checked.contains(s.id)).length;
+    final bool? value = n == 0 ? false : (n == all.length ? true : null);
+    return Tooltip(
+      message: value == true ? '取消全选' : '全选 ${all.length} 台',
+      child: _checkbox(value, tristate: true, (_) {
+        setState(() {
+          if (value == true) {
+            _checked.removeAll(all.map((s) => s.id));
+          } else {
+            _checked.addAll(all.map((s) => s.id));
+          }
+        });
+      }),
+    );
+  }
+
+  Widget _table(List<SessionConfig> rows, {required double maxHeight}) {
+    final cs = Theme.of(context).colorScheme;
+    final bodyH = math.min(rows.length * _rowH, maxHeight - _headerH - 2);
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: cs.outlineVariant),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              height: _headerH,
+              color: cs.surfaceContainerHigh,
+              child: Row(
+                children: [
+                  const SizedBox(width: 3),
+                  _headerCheckbox(rows),
+                  const SizedBox(width: 85),
+                  Expanded(flex: 4, child: _headerCell('名称', _SortKey.name)),
+                  Expanded(flex: 4, child: _headerCell('地址', _SortKey.address)),
+                  SizedBox(
+                    width: 120,
+                    child: _headerCell('最近连接', _SortKey.recent),
+                  ),
+                  SizedBox(
+                    width: _actionsW,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text(
+                        '操作',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: math.max(0, bodyH),
+              child: Scrollbar(
+                controller: _scroll,
+                thumbVisibility: rows.length * _rowH > bodyH,
+                child: ListView.builder(
+                  controller: _scroll,
+                  itemExtent: _rowH,
+                  itemCount: rows.length,
+                  itemBuilder: (context, i) => _row(rows[i]),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1131,12 +1688,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         child: Row(
           children: [
             Flexible(
-              child: Text(label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-                      color: active ? cs.onSurface : cs.onSurfaceVariant)),
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                  color: active ? cs.onSurface : cs.onSurfaceVariant,
+                ),
+              ),
             ),
             const SizedBox(width: 4),
             Icon(
@@ -1193,8 +1753,8 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     final label = s.type == SessionType.vnc
         ? 'VNC'
         : s.authType == AuthType.key
-            ? '密钥'
-            : '密码';
+        ? '密钥'
+        : '密码';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
@@ -1202,8 +1762,10 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: cs.outlineVariant),
       ),
-      child: Text(label,
-          style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+      ),
     );
   }
 
@@ -1213,8 +1775,10 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       iconSize: 18,
       visualDensity: VisualDensity.compact,
       onPressed: () => _copyInfo(s),
-      icon: Icon(Icons.content_copy_rounded,
-          color: Theme.of(context).colorScheme.onSurfaceVariant),
+      icon: Icon(
+        Icons.content_copy_rounded,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     );
   }
 
@@ -1240,8 +1804,11 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       onTapUp: (d) => _sessionMenu(s, d.globalPosition),
       child: Padding(
         padding: const EdgeInsets.all(8),
-        child: Icon(Icons.more_horiz,
-            size: 20, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        child: Icon(
+          Icons.more_horiz,
+          size: 20,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -1261,9 +1828,10 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     );
   }
 
-  Widget _row(SessionConfig s, {required bool showAuth}) {
+  Widget _row(SessionConfig s) {
     final cs = Theme.of(context).colorScheme;
-    final selected = _selectedId == s.id;
+    final checked = _checked.contains(s.id);
+    final selected = _selectedId == s.id || checked;
     final sub = s.type == SessionType.vnc
         ? 'VNC'
         : (s.username.isEmpty ? '—' : s.username);
@@ -1281,14 +1849,17 @@ class _ServerHomeViewState extends State<ServerHomeView> {
             decoration: BoxDecoration(
               border: Border(
                 top: BorderSide(
-                    color: cs.outlineVariant.withValues(alpha: 0.6)),
+                  color: cs.outlineVariant.withValues(alpha: 0.6),
+                ),
                 left: BorderSide(
-                    color: selected ? cs.primary : Colors.transparent,
-                    width: 3),
+                  color: selected ? cs.primary : Colors.transparent,
+                  width: 3,
+                ),
               ),
             ),
             child: Row(
               children: [
+                _checkbox(checked, (v) => _toggleChecked(s.id, v ?? false)),
                 SizedBox(width: 41, child: Center(child: _favButton(s))),
                 SizedBox(width: 44, child: Center(child: _typeIcon(s))),
                 Expanded(
@@ -1299,19 +1870,26 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(s.displayName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: cs.onSurface)),
+                        Text(
+                          s.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface,
+                          ),
+                        ),
                         const SizedBox(height: 2),
-                        Text(sub,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                                fontSize: 12, color: cs.onSurfaceVariant)),
+                        Text(
+                          sub,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -1320,33 +1898,27 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                   flex: 4,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('${s.host}:${s.port}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: _mono.copyWith(
-                            fontSize: 13, color: cs.onSurface)),
-                  ),
-                ),
-                if (showAuth)
-                  SizedBox(
-                    width: 100,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: _authBadge(s)),
+                    child: Text(
+                      '${s.host}:${s.port}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _mono.copyWith(fontSize: 13, color: cs.onSurface),
                     ),
                   ),
+                ),
                 SizedBox(
                   width: 120,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(formatAgo(s.lastConnectedAt),
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            color: s.lastConnectedAt > 0
-                                ? cs.onSurface
-                                : cs.onSurfaceVariant)),
+                    child: Text(
+                      formatAgo(s.lastConnectedAt),
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: s.lastConnectedAt > 0
+                            ? cs.onSurface
+                            : cs.onSurfaceVariant,
+                      ),
+                    ),
                   ),
                 ),
                 SizedBox(
@@ -1358,7 +1930,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                       _connectButton(s),
                       const Spacer(),
                       _moreButton(s),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 12),
                     ],
                   ),
                 ),
@@ -1371,23 +1943,26 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   }
 
   Widget _cards(List<SessionConfig> items, int cols) {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: cols,
-        mainAxisExtent: _cardH,
-        crossAxisSpacing: _gap,
-        mainAxisSpacing: _gap,
+    return Scrollbar(
+      controller: _scroll,
+      child: GridView.builder(
+        controller: _scroll,
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: cols,
+          mainAxisExtent: _cardH,
+          crossAxisSpacing: _gap,
+          mainAxisSpacing: _gap,
+        ),
+        itemCount: items.length,
+        itemBuilder: (context, i) => _card(items[i]),
       ),
-      itemCount: items.length,
-      itemBuilder: (context, i) => _card(items[i]),
     );
   }
 
   Widget _card(SessionConfig s) {
     final cs = Theme.of(context).colorScheme;
-    final selected = _selectedId == s.id;
+    final checked = _checked.contains(s.id);
+    final selected = _selectedId == s.id || checked;
     final sub = s.type == SessionType.vnc
         ? '${s.host}:${s.port}'
         : '${s.username}@${s.host}:${s.port}';
@@ -1400,8 +1975,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(
-              color: selected ? cs.primary : cs.outlineVariant,
-              width: selected ? 1.5 : 1),
+            color: selected ? cs.primary : cs.outlineVariant,
+            width: selected ? 1.5 : 1,
+          ),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
@@ -1414,16 +1990,33 @@ class _ServerHomeViewState extends State<ServerHomeView> {
               children: [
                 Row(
                   children: [
+                    if (_checked.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: SizedBox(
+                          width: 22,
+                          child: Checkbox(
+                            value: checked,
+                            visualDensity: VisualDensity.compact,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                            onChanged: (v) => _toggleChecked(s.id, v ?? false),
+                          ),
+                        ),
+                      ),
                     _typeIcon(s),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(s.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: cs.onSurface)),
+                      child: Text(
+                        s.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                        ),
+                      ),
                     ),
                     _favButton(s),
                   ],
@@ -1431,11 +2024,15 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: Text(sub,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: _mono.copyWith(
-                          fontSize: 12.5, color: cs.onSurfaceVariant)),
+                  child: Text(
+                    sub,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _mono.copyWith(
+                      fontSize: 12.5,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -1443,10 +2040,14 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                     _authBadge(s),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(formatAgo(s.lastConnectedAt),
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 12, color: cs.onSurfaceVariant)),
+                      child: Text(
+                        formatAgo(s.lastConnectedAt),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -1464,90 +2065,6 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           ),
         ),
       ),
-    );
-  }
-
-  // ---------------- 分页 ----------------
-
-  List<int> _pageItems(int page, int pages) {
-    if (pages <= 7) return List.generate(pages, (i) => i);
-    final set = <int>{0, pages - 1, page, page - 1, page + 1};
-    if (page <= 2) set.addAll([1, 2, 3]);
-    if (page >= pages - 3) set.addAll([pages - 4, pages - 3, pages - 2]);
-    final sorted = set.where((p) => p >= 0 && p < pages).toList()..sort();
-    final out = <int>[];
-    for (var i = 0; i < sorted.length; i++) {
-      if (i > 0 && sorted[i] - sorted[i - 1] > 1) out.add(-1);
-      out.add(sorted[i]);
-    }
-    return out;
-  }
-
-  Widget _pager(int start, int end, int total, int page, int pages) {
-    final cs = Theme.of(context).colorScheme;
-    Widget box({
-      required Widget child,
-      bool selected = false,
-      VoidCallback? onTap,
-    }) =>
-        Padding(
-          padding: const EdgeInsets.only(left: 6),
-          child: Material(
-            color: selected
-                ? cs.primary.withValues(alpha: 0.13)
-                : Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(
-                  color: selected ? cs.primary : cs.outlineVariant),
-            ),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: onTap,
-              child: SizedBox(width: 34, height: 34, child: Center(child: child)),
-            ),
-          ),
-        );
-    return Row(
-      children: [
-        Text('显示 ${start + 1}-$end 条，共 $total 条',
-            style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
-        const Spacer(),
-        box(
-          onTap: page > 0 ? () => setState(() => _page = page - 1) : null,
-          child: Icon(Icons.chevron_left,
-              size: 18,
-              color: page > 0
-                  ? cs.onSurface
-                  : cs.onSurfaceVariant.withValues(alpha: 0.4)),
-        ),
-        for (final p in _pageItems(page, pages))
-          p < 0
-              ? const Padding(
-                  padding: EdgeInsets.only(left: 6),
-                  child: SizedBox(width: 22, child: Center(child: Text('…'))),
-                )
-              : box(
-                  selected: p == page,
-                  onTap: () => setState(() => _page = p),
-                  child: Text('${p + 1}',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight:
-                              p == page ? FontWeight.w600 : FontWeight.normal,
-                          color: p == page ? cs.primary : cs.onSurface)),
-                ),
-        box(
-          onTap: page < pages - 1
-              ? () => setState(() => _page = page + 1)
-              : null,
-          child: Icon(Icons.chevron_right,
-              size: 18,
-              color: page < pages - 1
-                  ? cs.onSurface
-                  : cs.onSurfaceVariant.withValues(alpha: 0.4)),
-        ),
-      ],
     );
   }
 }

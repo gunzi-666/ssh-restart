@@ -12,6 +12,7 @@ import '../state/app_tab.dart';
 import '../state/ssh_tab.dart';
 import '../state/tabs_controller.dart';
 import '../state/vnc_tab.dart';
+import 'connect_progress_panel.dart';
 import 'server_home.dart';
 import 'session_manager.dart';
 import 'settings_page.dart';
@@ -38,8 +39,29 @@ class _HomePageState extends State<HomePage> {
 
   TabsController get tabs => context.read<TabsController>();
 
-  void _connect(SessionConfig s) {
-    tabs.open(s);
+  /// 单个连接：在当前页弹出连接进度，成功后才打开连接标签；失败可重试或关闭。
+  Future<void> _connect(SessionConfig s) async {
+    if (s.type != SessionType.ssh) {
+      tabs.open(s);
+      setState(() => _mobileShowSessions = false);
+      return;
+    }
+    final tab = tabs.connectInBackground(s);
+    final ok = await showConnectProgressDialog(context, tab);
+    if (!mounted) return;
+    if (ok && tab.status == TabStatus.connected) {
+      tabs.attach(tab);
+      setState(() => _mobileShowSessions = false);
+    } else {
+      await tab.close();
+    }
+  }
+
+  /// 批量连接直接打开标签，避免同时弹出多个进度窗口。
+  void _connectMany(List<SessionConfig> list) {
+    for (final s in list) {
+      tabs.open(s);
+    }
     setState(() => _mobileShowSessions = false);
   }
 
@@ -70,18 +92,26 @@ class _HomePageState extends State<HomePage> {
     final r = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy),
-      items: const [
-        PopupMenuItem(value: 'reconnect', child: Text('重新连接')),
-        PopupMenuItem(value: 'dup', child: Text('复制标签')),
-        PopupMenuDivider(),
-        PopupMenuItem(value: 'close', child: Text('关闭')),
-        PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
-        PopupMenuItem(value: 'all', child: Text('关闭全部标签')),
+      items: [
+        const PopupMenuItem(value: 'reconnect', child: Text('重新连接')),
+        if (t is SshTab && t.progress != null)
+          const PopupMenuItem(value: 'log', child: Text('连接日志')),
+        const PopupMenuItem(value: 'dup', child: Text('复制标签')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'close', child: Text('关闭')),
+        const PopupMenuItem(value: 'others', child: Text('关闭其他标签')),
+        const PopupMenuItem(value: 'all', child: Text('关闭全部标签')),
       ],
     );
+    if (!mounted) return;
     switch (r) {
       case 'reconnect':
         t.reconnect();
+        if (t is SshTab) showConnectProgressDialog(context, t);
+      case 'log':
+        if (t is SshTab) {
+          showConnectProgressDialog(context, t, autoClose: false);
+        }
       case 'dup':
         tabs.duplicate(t);
       case 'close':
@@ -221,7 +251,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 if (_desktopPlatform && !_isMacDesktop) ...[
                   const SizedBox(width: 4),
-                  const _WindowButtons(),
+                  const WindowButtons(),
                 ] else
                   const SizedBox(width: 8),
               ],
@@ -243,6 +273,7 @@ class _HomePageState extends State<HomePage> {
   Widget _welcome() {
     return ServerHomeView(
       onConnect: _connect,
+      onConnectMany: _connectMany,
       onOpenSettings: (tab) => _openSettings(tab: tab),
     );
   }
@@ -452,14 +483,14 @@ class _DesktopTabChip extends StatelessWidget {
 }
 
 /// 自绘标题栏的窗口控制按钮：最小化 / 最大化还原 / 关闭。
-class _WindowButtons extends StatefulWidget {
-  const _WindowButtons();
+class WindowButtons extends StatefulWidget {
+  const WindowButtons({super.key});
 
   @override
-  State<_WindowButtons> createState() => _WindowButtonsState();
+  State<WindowButtons> createState() => WindowButtonsState();
 }
 
-class _WindowButtonsState extends State<_WindowButtons> with WindowListener {
+class WindowButtonsState extends State<WindowButtons> with WindowListener {
   bool _maximized = false;
 
   @override

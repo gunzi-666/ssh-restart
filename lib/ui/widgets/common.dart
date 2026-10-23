@@ -39,11 +39,13 @@ bool isWide(BuildContext context) => MediaQuery.sizeOf(context).width >= 900;
 void showToast(BuildContext context, String msg) {
   final m = ScaffoldMessenger.maybeOf(context);
   m?.hideCurrentSnackBar();
-  m?.showSnackBar(SnackBar(
-    content: Text(msg),
-    behavior: SnackBarBehavior.floating,
-    duration: const Duration(seconds: 3),
-  ));
+  m?.showSnackBar(
+    SnackBar(
+      content: Text(msg),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 3),
+    ),
+  );
 }
 
 Future<void> copyText(BuildContext context, String text, {String? tip}) async {
@@ -83,9 +85,10 @@ Future<String?> promptText(
         actions: [
           AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
           AppButton(
-              label: okText,
-              primary: true,
-              onPressed: () => Navigator.pop(ctx, ctrl.text)),
+            label: okText,
+            primary: true,
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+          ),
         ],
         child: label == null ? field : LabeledField(label: label, child: field),
       );
@@ -110,10 +113,11 @@ Future<bool> confirm(
       actions: [
         AppButton(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
         AppButton(
-            label: okText,
-            primary: true,
-            danger: danger,
-            onPressed: () => Navigator.pop(ctx, true)),
+          label: okText,
+          primary: true,
+          danger: danger,
+          onPressed: () => Navigator.pop(ctx, true),
+        ),
       ],
     ),
   );
@@ -132,10 +136,13 @@ class SectionTitle extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(text,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w600)),
+            child: Text(
+              text,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
           ?trailing,
         ],
@@ -146,8 +153,16 @@ class SectionTitle extends StatelessWidget {
 
 /// 可拖动的分隔条，用于调整面板尺寸。
 class DragDivider extends StatelessWidget {
-  const DragDivider({super.key, required this.onDrag, this.vertical = true});
+  const DragDivider({
+    super.key,
+    required this.onDrag,
+    this.onStart,
+    this.onEnd,
+    this.vertical = true,
+  });
   final void Function(double delta) onDrag;
+  final VoidCallback? onStart;
+  final VoidCallback? onEnd;
   final bool vertical;
 
   @override
@@ -161,6 +176,14 @@ class DragDivider extends StatelessWidget {
         behavior: HitTestBehavior.translucent,
         onHorizontalDragUpdate: vertical ? (d) => onDrag(d.delta.dx) : null,
         onVerticalDragUpdate: vertical ? null : (d) => onDrag(d.delta.dy),
+        onHorizontalDragStart: vertical && onStart != null
+            ? (_) => onStart!()
+            : null,
+        onVerticalDragStart: !vertical && onStart != null
+            ? (_) => onStart!()
+            : null,
+        onHorizontalDragEnd: vertical && onEnd != null ? (_) => onEnd!() : null,
+        onVerticalDragEnd: !vertical && onEnd != null ? (_) => onEnd!() : null,
         child: SizedBox(
           width: vertical ? 6 : double.infinity,
           height: vertical ? double.infinity : 6,
@@ -194,15 +217,16 @@ class UsageBar extends StatelessWidget {
     final color = value > 0.9
         ? const Color(0xFFE5484D)
         : value > 0.7
-            ? const Color(0xFFF5A524)
-            : cs.primary;
+        ? const Color(0xFFF5A524)
+        : cs.primary;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(
         children: [
           SizedBox(
-              width: 36,
-              child: Text(label, style: const TextStyle(fontSize: 12))),
+            width: 36,
+            child: Text(label, style: const TextStyle(fontSize: 12)),
+          ),
           Expanded(
             child: Stack(
               alignment: Alignment.center,
@@ -216,10 +240,14 @@ class UsageBar extends StatelessWidget {
                     backgroundColor: cs.surfaceContainerHighest,
                   ),
                 ),
-                Text(text,
-                    style: const TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w500),
-                    overflow: TextOverflow.ellipsis),
+                Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),

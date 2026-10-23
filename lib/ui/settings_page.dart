@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../models/app_settings.dart';
@@ -14,6 +16,7 @@ import '../services/backup_manager.dart';
 import '../services/finalshell_import.dart';
 import '../services/gdrive_service.dart';
 import 'app_style.dart';
+import 'data_dialogs.dart';
 import 'terminal_themes.dart';
 import 'widgets/common.dart';
 
@@ -380,6 +383,41 @@ class _GeneralSettings extends StatelessWidget {
             ],
           ),
         ),
+        const SectionTitle('安全'),
+        SwitchListTile(
+          title: const Text('启动密码'),
+          subtitle: const Text('打开软件时需要输入密码。仅用于验证身份，本机数据不加密'),
+          value: store.hasStartupPassword,
+          onChanged: (v) async {
+            final Future<bool> pending = v
+                ? showSetStartupPasswordDialog(context)
+                : showDisableStartupPasswordDialog(context);
+            final ok = await pending;
+            if (ok && context.mounted) {
+              showToast(context, v ? '已开启启动密码' : '已关闭启动密码');
+            }
+          },
+        ),
+        if (store.hasStartupPassword)
+          ListTile(
+            title: const Text('修改启动密码'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              if (await showSetStartupPasswordDialog(context, change: true) &&
+                  context.mounted) {
+                showToast(context, '启动密码已修改');
+              }
+            },
+          ),
+        const SectionTitle('数据'),
+        ListTile(
+          title: Text('清除所有数据',
+              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          subtitle: const Text('删除本机保存的全部服务器、设置和数据文件，无法撤销'),
+          trailing: Icon(Icons.delete_forever_outlined,
+              color: Theme.of(context).colorScheme.error),
+          onTap: () => showClearAllDataDialog(context),
+        ),
       ],
     );
   }
@@ -523,6 +561,10 @@ class _BackupSettingsState extends State<BackupSettings> {
   late final _clientSecret = TextEditingController(text: store.settings.gdriveClientSecret);
   bool _showKey = false;
   bool _working = false;
+  bool _dragging = false;
+
+  static final bool _canDrop =
+      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
   BackupManager get bm => context.read<BackupManager>();
 
@@ -594,6 +636,50 @@ class _BackupSettingsState extends State<BackupSettings> {
       if (mounted) showToast(context, '所选文件不是本软件的备份文件');
       return;
     }
+    await _importBackupText(text);
+  }
+
+  /// 拖入文件：本软件备份直接解密导入；FinalShell 的目录 / zip / json 走 FinalShell 导入。
+  Future<void> _importDropped(List<String> paths) async {
+    if (paths.isEmpty || _working || bm.busy) return;
+    if (paths.length == 1 && FileSystemEntity.isFileSync(paths.first)) {
+      final f = File(paths.first);
+      if (f.lengthSync() > 64 * 1024 * 1024) {
+        showToast(context, '文件过大，不是有效的备份文件');
+        return;
+      }
+      final text = utf8.decode(await f.readAsBytes(), allowMalformed: true);
+      if (BackupCrypto.looksLikeBackup(text)) {
+        await _importBackupText(text);
+        return;
+      }
+    }
+
+    FinalShellImportResult? res;
+    await _busy(() async {
+      if (paths.length == 1 && FileSystemEntity.isDirectorySync(paths.first)) {
+        res = await FinalShellImporter.fromDirectory(paths.first);
+        return;
+      }
+      final files = <String, Uint8List>{};
+      for (final path in paths) {
+        final ext = p.extension(path).toLowerCase();
+        if ((ext == '.zip' || ext == '.json') && FileSystemEntity.isFileSync(path)) {
+          files[p.basename(path)] = await File(path).readAsBytes();
+        }
+      }
+      if (files.isNotEmpty) res = FinalShellImporter.fromFiles(files);
+    });
+    final result = res;
+    if (!mounted) return;
+    if (result == null || (result.sessions.isEmpty && result.skippedOther == 0)) {
+      showToast(context, '无法识别拖入的文件：请拖入本软件的备份文件，或 FinalShell 的目录 / zip / json');
+      return;
+    }
+    await _confirmFinalShell(result);
+  }
+
+  Future<void> _importBackupText(String text) async {
     if (!mounted) return;
     var key = _key.text;
     if (key.isEmpty) {
@@ -684,6 +770,10 @@ class _BackupSettingsState extends State<BackupSettings> {
     });
     final result = res;
     if (result == null || !mounted) return;
+    await _confirmFinalShell(result);
+  }
+
+  Future<void> _confirmFinalShell(FinalShellImportResult result) async {
     if (result.sessions.isEmpty) {
       showToast(context, result.skippedOther > 0
           ? '只找到 ${result.skippedOther} 个非 SSH 连接，已跳过'
@@ -809,7 +899,7 @@ class _BackupSettingsState extends State<BackupSettings> {
     final bm = context.watch<BackupManager>();
     final s = store.settings;
     final authorized = bm.drive.authorized;
-    return Center(
+    final page = Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
         child: AbsorbPointer(
@@ -865,12 +955,15 @@ class _BackupSettingsState extends State<BackupSettings> {
             subtitle: const Text('保存到本地，可通过任意方式传到其他设备'),
             onTap: _exportLocal,
           ),
-          ListTile(
-            leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('导入备份文件'),
-            subtitle: const Text('选择备份文件并用加密密钥解密导入'),
-            onTap: _importLocal,
-          ),
+          if (_canDrop)
+            _dropZone()
+          else
+            ListTile(
+              leading: const Icon(Icons.file_upload_outlined),
+              title: const Text('导入备份文件'),
+              subtitle: const Text('选择备份文件并用加密密钥解密导入'),
+              onTap: _importLocal,
+            ),
           const SectionTitle('从其他软件导入'),
           ListTile(
             leading: const Icon(Icons.move_down_rounded),
@@ -1001,6 +1094,90 @@ class _BackupSettingsState extends State<BackupSettings> {
       ),
     ),
   );
+    if (!_canDrop) return page;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      onDragDone: (d) {
+        setState(() => _dragging = false);
+        _importDropped([for (final f in d.files) f.path]);
+      },
+      child: Stack(
+        children: [
+          page,
+          if (_dragging) Positioned.fill(child: IgnorePointer(child: _dropOverlay())),
+        ],
+      ),
+    );
+  }
+
+  Widget _dropZone() {
+    final cs = Theme.of(context).colorScheme;
+    final st = AppStyle.of(context);
+    final active = _dragging;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Material(
+        color: active ? cs.primary.withValues(alpha: 0.08) : st.muted.withValues(alpha: 0.4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(st.cardRadius),
+          side: BorderSide(
+            color: active ? cs.primary : cs.outlineVariant,
+            width: active ? 1.5 : 1,
+          ),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(st.cardRadius),
+          onTap: _importLocal,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 22),
+            child: Column(
+              children: [
+                Icon(Icons.upload_file_rounded,
+                    size: 30, color: active ? cs.primary : cs.onSurfaceVariant),
+                const SizedBox(height: 8),
+                Text('拖入备份文件到这里，或点击选择文件',
+                    style: TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+                const SizedBox(height: 4),
+                Text('支持本软件的加密备份；也可以直接拖入 FinalShell 的目录、zip 或 json',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dropOverlay() {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      color: cs.surface.withValues(alpha: 0.82),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 28),
+        decoration: BoxDecoration(
+          color: cs.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: cs.primary, width: 2),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.file_download_rounded, size: 40, color: cs.primary),
+            const SizedBox(height: 10),
+            Text('松开鼠标导入',
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w700, color: cs.primary)),
+            const SizedBox(height: 4),
+            Text('备份文件 / FinalShell 目录、zip、json',
+                style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
+          ],
+        ),
+      ),
+    );
   }
 }
 
