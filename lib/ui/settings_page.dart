@@ -1,15 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/app_settings.dart';
+import '../models/session_config.dart';
 import '../services/app_store.dart';
 import '../services/backup_crypto.dart';
 import '../services/backup_manager.dart';
+import '../services/finalshell_import.dart';
 import '../services/gdrive_service.dart';
+import 'app_style.dart';
 import 'terminal_themes.dart';
 import 'widgets/common.dart';
 
@@ -68,6 +72,196 @@ class _SettingsScroll extends StatelessWidget {
   }
 }
 
+/// 界面风格卡片：用该风格的真实主题渲染一个缩略预览。
+class _StyleCard extends StatelessWidget {
+  const _StyleCard({
+    required this.style,
+    required this.accent,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final UiStyle style;
+  final Color accent;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final preview = buildAppTheme(cs.brightness, accent, style);
+    return SizedBox(
+      width: 208,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected ? cs.primary : cs.outlineVariant,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Theme(
+                  data: preview,
+                  child: const _StylePreview(),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(style.label,
+                            style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: cs.onSurface)),
+                      ),
+                      if (selected)
+                        Icon(Icons.check_circle_rounded,
+                            size: 16, color: cs.primary),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                  child: Text(style.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.4,
+                          color: cs.onSurfaceVariant)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StylePreview extends StatelessWidget {
+  const _StylePreview();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final st = AppStyle.of(context);
+    Widget bar(double w, Color c) => Container(
+          width: w,
+          height: 6,
+          decoration: BoxDecoration(
+              color: c, borderRadius: BorderRadius.circular(3)),
+        );
+    final r = BorderRadius.circular(st.controlRadius * 0.6);
+    return Container(
+      height: 92,
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            color: cs.surfaceContainerLow,
+            padding: const EdgeInsets.fromLTRB(7, 10, 7, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: cs.primary.withValues(alpha: 0.2),
+                    borderRadius: r,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                bar(24, cs.onSurfaceVariant.withValues(alpha: 0.4)),
+                const SizedBox(height: 6),
+                bar(28, cs.onSurfaceVariant.withValues(alpha: 0.4)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      bar(46, cs.onSurface.withValues(alpha: 0.7)),
+                      const Spacer(),
+                      Container(
+                        width: 32,
+                        height: 14,
+                        decoration: BoxDecoration(
+                            color: cs.primary, borderRadius: r),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: cs.surfaceContainer,
+                        borderRadius:
+                            BorderRadius.circular(st.cardRadius * 0.5),
+                        border: Border.all(color: cs.outlineVariant),
+                      ),
+                      padding: const EdgeInsets.all(7),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: st.inputFill,
+                              borderRadius: r,
+                              border: Border.all(color: cs.outlineVariant),
+                            ),
+                          ),
+                          const Spacer(),
+                          Row(
+                            children: [
+                              bar(30, cs.onSurfaceVariant.withValues(alpha: 0.45)),
+                              const Spacer(),
+                              Container(
+                                width: 22,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  color: st.secondaryFill,
+                                  borderRadius: r,
+                                  border: Border.all(color: cs.outlineVariant),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GeneralSettings extends StatelessWidget {
   const _GeneralSettings();
 
@@ -83,7 +277,26 @@ class _GeneralSettings extends StatelessWidget {
       children: [
         const SectionTitle('外观'),
         ListTile(
-          title: const Text('主题'),
+          title: const Text('界面风格'),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 10, bottom: 4),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final st in UiStyle.values)
+                  _StyleCard(
+                    style: st,
+                    accent: Color(s.accentColor),
+                    selected: UiStyle.parse(s.uiStyle) == st,
+                    onTap: () => store.updateSettings((x) => x.uiStyle = st.id),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        ListTile(
+          title: const Text('明暗模式'),
           trailing: SegmentedButton<AppThemeMode>(
             segments: const [
               ButtonSegment(value: AppThemeMode.system, label: Text('跟随系统')),
@@ -121,13 +334,13 @@ class _GeneralSettings extends StatelessWidget {
         ),
         ListTile(
           title: const Text('状态监控刷新间隔'),
-          trailing: DropdownButton<int>(
+          trailing: AppSelect<int>(
             value: s.monitorIntervalSeconds,
-            items: [
-              for (final v in [1, 2, 3, 5, 10, 30])
-                DropdownMenuItem(value: v, child: Text('$v 秒')),
+            options: [
+              for (final v in [1, 2, 3, 5, 10, 30]) (value: v, label: '$v 秒'),
             ],
-            onChanged: (v) => store.updateSettings((x) => x.monitorIntervalSeconds = v ?? 2),
+            onChanged: (v) =>
+                store.updateSettings((x) => x.monitorIntervalSeconds = v),
           ),
         ),
         const SectionTitle('文件管理'),
@@ -264,13 +477,13 @@ class _TerminalSettings extends StatelessWidget {
         ListTile(
           title: const Text('回滚行数'),
           subtitle: const Text('对新打开的标签生效'),
-          trailing: DropdownButton<int>(
+          trailing: AppSelect<int>(
             value: s.scrollback,
-            items: [
+            options: [
               for (final v in [1000, 3000, 5000, 10000, 20000, 50000])
-                DropdownMenuItem(value: v, child: Text('$v')),
+                (value: v, label: '$v'),
             ],
-            onChanged: (v) => store.updateSettings((x) => x.scrollback = v ?? 5000),
+            onChanged: (v) => store.updateSettings((x) => x.scrollback = v),
           ),
         ),
         SwitchListTile(
@@ -395,6 +608,168 @@ class _BackupSettingsState extends State<BackupSettings> {
     });
   }
 
+  Future<void> _importFinalShell() async {
+    final detected = FinalShellImporter.detectDefaultDir();
+    final src = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AppDialog(
+        title: '从 FinalShell 导入',
+        description: '选择 FinalShell 的数据目录（包含 conn 文件夹）、conn 文件夹本身，'
+            '或包含连接配置的 zip / json 文件。',
+        width: 480,
+        actions: [AppButton(label: '取消', onPressed: () => Navigator.pop(ctx))],
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Theme.of(ctx).colorScheme.outlineVariant),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (detected != null)
+                AppMenuItem(
+                  height: 40,
+                  icon: Icons.auto_awesome_outlined,
+                  label: '使用检测到的目录：$detected',
+                  onTap: () => Navigator.pop(ctx, 'auto'),
+                ),
+              AppMenuItem(
+                height: 40,
+                icon: Icons.folder_open_outlined,
+                label: '选择文件夹…',
+                onTap: () => Navigator.pop(ctx, 'dir'),
+              ),
+              AppMenuItem(
+                height: 40,
+                icon: Icons.insert_drive_file_outlined,
+                label: '选择文件（.zip / .json，可多选）…',
+                onTap: () => Navigator.pop(ctx, 'file'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (src == null) return;
+
+    FinalShellImportResult? res;
+    await _busy(() async {
+      switch (src) {
+        case 'auto':
+          res = await FinalShellImporter.fromDirectory(detected!);
+        case 'dir':
+          final p = await FilePicker.getDirectoryPath(
+              dialogTitle: '选择 FinalShell 目录或 conn 文件夹');
+          if (p == null) return;
+          res = await FinalShellImporter.fromDirectory(p);
+        case 'file':
+          final r = await FilePicker.pickFiles(
+            dialogTitle: '选择 FinalShell 配置文件',
+            allowMultiple: true,
+            withData: true,
+            type: FileType.custom,
+            allowedExtensions: const ['zip', 'json'],
+          );
+          if (r == null) return;
+          final files = <String, Uint8List>{};
+          for (final f in r.files) {
+            final bytes = f.bytes ??
+                (f.path != null ? await File(f.path!).readAsBytes() : null);
+            if (bytes != null) files[f.name] = bytes;
+          }
+          res = FinalShellImporter.fromFiles(files);
+      }
+    });
+    final result = res;
+    if (result == null || !mounted) return;
+    if (result.sessions.isEmpty) {
+      showToast(context, result.skippedOther > 0
+          ? '只找到 ${result.skippedOther} 个非 SSH 连接，已跳过'
+          : '没有找到 FinalShell 连接配置，请确认选择的是 conn 目录或其上级目录');
+      return;
+    }
+
+    String keyOf(SessionConfig s) => '${s.host}:${s.port}:${s.username}';
+    final existing = {for (final s in store.sessions) keyOf(s)};
+    final fresh =
+        result.sessions.where((s) => !existing.contains(keyOf(s))).toList();
+    final dup = result.sessions.length - fresh.length;
+
+    final byId = {for (final g in result.groups) g.id: g};
+    final used = <String>{};
+    for (final s in fresh) {
+      var id = s.groupId;
+      while (id != null && used.add(id)) {
+        id = byId[id]?.parentId;
+      }
+    }
+    final groups = result.groups.where((g) => used.contains(g.id)).toList();
+
+    final cs = Theme.of(context).colorScheme;
+    Widget row(String label, String value, {Color? color}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(
+            children: [
+              Expanded(
+                  child: Text(label,
+                      style: TextStyle(fontSize: 13.5, color: cs.onSurfaceVariant))),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: color ?? cs.onSurface)),
+            ],
+          ),
+        );
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AppDialog(
+        title: '确认导入',
+        description: '以合并方式导入，不会修改或删除本机已有的服务器。',
+        width: 440,
+        actions: [
+          AppButton(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
+          AppButton(
+            label: fresh.isEmpty ? '无可导入项' : '导入 ${fresh.length} 台服务器',
+            primary: true,
+            onPressed: fresh.isEmpty ? null : () => Navigator.pop(ctx, true),
+          ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: cs.outlineVariant),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              row('识别到的 SSH 服务器', '${result.sessions.length} 台'),
+              row('将导入', '${fresh.length} 台', color: cs.primary),
+              if (dup > 0) row('本机已存在（跳过）', '$dup 台'),
+              row('分组', '${groups.length} 个'),
+              row('密码解密成功', '${result.passwordOk} 个'),
+              if (result.passwordFailed > 0)
+                row('密码解密失败（需手动填写）', '${result.passwordFailed} 个',
+                    color: cs.error),
+              if (result.keyMatched > 0) row('私钥', '${result.keyMatched} 个'),
+              if (result.keyMissing > 0)
+                row('未找到私钥（需手动导入）', '${result.keyMissing} 个',
+                    color: cs.error),
+              if (result.skippedOther > 0)
+                row('非 SSH 连接（跳过）', '${result.skippedOther} 个'),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (ok != true) return;
+    store.mergeBackup(sessions: fresh, groups: groups, quickCommands: const []);
+    if (mounted) showToast(context, '已从 FinalShell 导入 ${fresh.length} 台服务器');
+  }
+
   Future<void> _authorize() async {
     store.updateSettings((s) {
       s.gdriveClientId = _clientId.text.trim();
@@ -496,6 +871,13 @@ class _BackupSettingsState extends State<BackupSettings> {
             subtitle: const Text('选择备份文件并用加密密钥解密导入'),
             onTap: _importLocal,
           ),
+          const SectionTitle('从其他软件导入'),
+          ListTile(
+            leading: const Icon(Icons.move_down_rounded),
+            title: const Text('从 FinalShell 导入'),
+            subtitle: const Text('读取 FinalShell 的连接配置（目录、zip 或 json），自动解密密码并还原分组'),
+            onTap: _importFinalShell,
+          ),
           const SectionTitle('谷歌云盘'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -572,14 +954,14 @@ class _BackupSettingsState extends State<BackupSettings> {
           if (s.gdriveAutoUpload)
             ListTile(
               title: const Text('上传间隔'),
-              trailing: DropdownButton<int>(
+              trailing: AppSelect<int>(
                 value: s.gdriveAutoUploadHours,
-                items: [
+                options: [
                   for (final h in [1, 3, 6, 12, 24, 72, 168])
-                    DropdownMenuItem(
-                        value: h, child: Text(h < 24 ? '$h 小时' : '${h ~/ 24} 天')),
+                    (value: h, label: h < 24 ? '$h 小时' : '${h ~/ 24} 天'),
                 ],
-                onChanged: (v) => store.updateSettings((x) => x.gdriveAutoUploadHours = v ?? 24),
+                onChanged: (v) =>
+                    store.updateSettings((x) => x.gdriveAutoUploadHours = v),
               ),
             ),
           SwitchListTile(
@@ -600,13 +982,13 @@ class _BackupSettingsState extends State<BackupSettings> {
           ),
           ListTile(
             title: const Text('云盘保留备份份数'),
-            trailing: DropdownButton<int>(
+            trailing: AppSelect<int>(
               value: s.gdriveKeepCount,
-              items: [
-                for (final n in [3, 5, 10, 20, 50])
-                  DropdownMenuItem(value: n, child: Text('$n 份')),
+              options: [
+                for (final n in [3, 5, 10, 20, 50]) (value: n, label: '$n 份'),
               ],
-              onChanged: (v) => store.updateSettings((x) => x.gdriveKeepCount = v ?? 10),
+              onChanged: (v) =>
+                  store.updateSettings((x) => x.gdriveKeepCount = v),
             ),
           ),
             if (bm.status.isNotEmpty)

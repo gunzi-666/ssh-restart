@@ -124,20 +124,17 @@ class MonitorPanel extends StatelessWidget {
                   Text('网络', style: theme.textTheme.labelMedium),
                   const Spacer(),
                   if (m.interfaces.isNotEmpty)
-                    DropdownButton<String>(
+                    AppSelect<String>(
+                      dense: true,
+                      width: 118,
                       value: m.interfaces.contains(m.selectedIface)
                           ? m.selectedIface
                           : '',
-                      isDense: true,
-                      underline: const SizedBox(),
-                      borderRadius: BorderRadius.circular(12),
-                      style: TextStyle(fontSize: 11, color: cs.onSurface),
-                      items: [
-                        const DropdownMenuItem(value: '', child: Text('全部网卡')),
-                        for (final i in m.interfaces)
-                          DropdownMenuItem(value: i, child: Text(i)),
+                      options: [
+                        (value: '', label: '全部网卡'),
+                        for (final i in m.interfaces) (value: i, label: i),
                       ],
-                      onChanged: (v) => m.selectIface(v ?? ''),
+                      onChanged: m.selectIface,
                     ),
                 ],
               ),

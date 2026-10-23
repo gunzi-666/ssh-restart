@@ -285,21 +285,46 @@ class _ServerHomeViewState extends State<ServerHomeView> {
 
   Future<void> _moveTo(SessionConfig s) async {
     final groups = store.groups;
+    Widget option(BuildContext ctx, String id, String label, IconData icon) {
+      final current = (s.groupId ?? '') == id;
+      return AppMenuItem(
+        height: 38,
+        icon: icon,
+        label: label,
+        selected: current,
+        trailing: current
+            ? Icon(Icons.check_rounded,
+                size: 16, color: Theme.of(ctx).colorScheme.onSurface)
+            : null,
+        onTap: () => Navigator.pop(ctx, id),
+      );
+    }
+
     final target = await showDialog<String>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('移动到分组'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, ''),
-            child: const Text('未分组'),
-          ),
-          for (final g in groups)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, g.id),
-              child: Text(_groupPath(g)),
-            ),
+      builder: (ctx) => AppDialog(
+        title: '移动到分组',
+        description: '选择“${s.displayName}”要移动到的分组。',
+        width: 420,
+        actions: [
+          AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
         ],
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 320),
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Theme.of(ctx).colorScheme.outlineVariant),
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              option(ctx, '', '未分组', Icons.inbox_outlined),
+              for (final g in groups)
+                option(ctx, g.id, _groupPath(g), Icons.folder_outlined),
+            ],
+          ),
+        ),
       ),
     );
     if (target == null) return;
@@ -308,14 +333,22 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   }
 
   Future<void> _newGroup({String? parentId}) async {
-    final name = await promptText(context, title: '新建分组', label: '分组名称');
+    final name = await promptText(context,
+        title: '新建分组',
+        description: '分组用于整理服务器，可在左侧拖拽服务器到分组中。',
+        label: '分组名称',
+        hint: '例如：生产环境',
+        okText: '创建');
     if (name == null || name.trim().isEmpty) return;
     store.upsertGroup(SessionGroup(name: name.trim(), parentId: parentId));
   }
 
   Future<void> _renameGroup(SessionGroup g) async {
     final name = await promptText(context,
-        title: '重命名分组', initial: g.name, label: '分组名称');
+        title: '重命名分组',
+        initial: g.name,
+        label: '分组名称',
+        okText: '保存');
     if (name == null || name.trim().isEmpty) return;
     g.name = name.trim();
     store.upsertGroup(g);
@@ -344,22 +377,22 @@ class _ServerHomeViewState extends State<ServerHomeView> {
 
   Future<void> _sessionMenu(SessionConfig s, Offset pos) async {
     setState(() => _selectedId = s.id);
-    final r = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy),
-      items: [
-        const PopupMenuItem(value: 'connect', child: Text('连接')),
-        PopupMenuItem(
-            value: 'fav', child: Text(s.favorite ? '取消收藏' : '收藏')),
-        const PopupMenuItem(value: 'edit', child: Text('编辑')),
-        const PopupMenuItem(value: 'dup', child: Text('复制服务器')),
-        const PopupMenuItem(value: 'move', child: Text('移动到分组')),
-        const PopupMenuItem(value: 'copyInfo', child: Text('复制连接信息')),
-        const PopupMenuItem(value: 'copyHost', child: Text('复制地址')),
-        const PopupMenuDivider(),
-        const PopupMenuItem(value: 'delete', child: Text('删除')),
-      ],
-    );
+    final r = await showAppMenu<String>(context, pos, [
+      const AppMenuEntry('connect', '连接', icon: Icons.play_arrow_rounded),
+      AppMenuEntry('fav', s.favorite ? '取消收藏' : '收藏',
+          icon: s.favorite ? Icons.star_rounded : Icons.star_outline_rounded),
+      const AppMenuEntry.divider(),
+      const AppMenuEntry('edit', '编辑', icon: Icons.edit_outlined),
+      const AppMenuEntry('dup', '复制服务器', icon: Icons.control_point_duplicate),
+      const AppMenuEntry('move', '移动到分组',
+          icon: Icons.drive_file_move_outline),
+      const AppMenuEntry.divider(),
+      const AppMenuEntry('copyInfo', '复制连接信息', icon: Icons.copy_rounded),
+      const AppMenuEntry('copyHost', '复制地址', icon: Icons.link_rounded),
+      const AppMenuEntry.divider(),
+      const AppMenuEntry('delete', '删除',
+          icon: Icons.delete_outline_rounded, danger: true),
+    ]);
     if (!mounted) return;
     switch (r) {
       case 'connect':
@@ -382,16 +415,13 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   }
 
   Future<void> _groupMenu(SessionGroup g, Offset pos) async {
-    final r = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx, pos.dy),
-      items: const [
-        PopupMenuItem(value: 'sub', child: Text('新建子分组')),
-        PopupMenuItem(value: 'rename', child: Text('重命名')),
-        PopupMenuDivider(),
-        PopupMenuItem(value: 'delete', child: Text('删除分组')),
-      ],
-    );
+    final r = await showAppMenu<String>(context, pos, const [
+      AppMenuEntry('sub', '新建子分组', icon: Icons.create_new_folder_outlined),
+      AppMenuEntry('rename', '重命名', icon: Icons.drive_file_rename_outline),
+      AppMenuEntry.divider(),
+      AppMenuEntry('delete', '删除分组',
+          icon: Icons.delete_outline_rounded, danger: true),
+    ]);
     if (!mounted) return;
     switch (r) {
       case 'sub':
@@ -856,34 +886,39 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   Widget _authFilterButton() {
     final cs = Theme.of(context).colorScheme;
     final active = _auth != null;
-    PopupMenuItem<int> item(int v, String label, bool checked) => PopupMenuItem(
-          value: v,
-          child: Row(
-            children: [
-              SizedBox(
-                width: 22,
-                child: checked
-                    ? Icon(Icons.check, size: 16, color: cs.primary)
-                    : null,
-              ),
-              Text(label),
-            ],
-          ),
-        );
-    return PopupMenuButton<int>(
-      tooltip: '按认证方式筛选',
-      position: PopupMenuPosition.under,
-      onSelected: (v) => _update(() => _auth = switch (v) {
-            1 => AuthType.password,
-            2 => AuthType.key,
-            _ => null,
-          }),
-      itemBuilder: (_) => [
+    AppMenuEntry<int> item(int v, String label, bool checked) => AppMenuEntry(
+        v, label,
+        icon: checked ? Icons.check_rounded : null);
+    Future<void> open(BuildContext ctx) async {
+      final box = ctx.findRenderObject() as RenderBox;
+      final pos = box.localToGlobal(Offset(0, box.size.height + 6));
+      final v = await showAppMenu<int>(ctx, pos, [
         item(0, '全部认证方式', _auth == null),
         item(1, '密码', _auth == AuthType.password),
         item(2, '密钥', _auth == AuthType.key),
-      ],
-      child: Container(
+      ]);
+      if (v == null) return;
+      _update(() => _auth = switch (v) {
+            1 => AuthType.password,
+            2 => AuthType.key,
+            _ => null,
+          });
+    }
+
+    return Builder(
+      builder: (ctx) => Tooltip(
+        message: '按认证方式筛选',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => open(ctx),
+          child: _authFilterBox(cs, active),
+        ),
+      ),
+    );
+  }
+
+  Widget _authFilterBox(ColorScheme cs, bool active) {
+    return Container(
         width: 44,
         height: 44,
         decoration: BoxDecoration(
@@ -893,8 +928,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         ),
         child: Icon(Icons.filter_list,
             size: 20, color: active ? cs.primary : cs.onSurfaceVariant),
-      ),
-    );
+      );
   }
 
   Widget _chip(String label, bool selected, VoidCallback onTap) {

@@ -16,8 +16,8 @@ Future<SessionConfig?> showSessionEditor(BuildContext context, SessionConfig s,
   if (isWide(context)) {
     return showDialog<SessionConfig>(
       context: context,
-      builder: (_) => Dialog(
-        child: SizedBox(width: 640, height: 620, child: page),
+      builder: (_) => AppDialogShell(
+        child: SizedBox(width: 620, height: 640, child: page),
       ),
     );
   }
@@ -83,56 +83,127 @@ class _SessionEditorState extends State<SessionEditor> {
     setState(() => _key.text = utf8.decode(bytes, allowMalformed: true));
   }
 
+  String get _title => widget.isNew
+      ? (isVnc ? '新建 VNC 远程桌面' : '新建 SSH 连接')
+      : '编辑会话';
+
+  String get _description => widget.isNew
+      ? '填写服务器的连接信息，保存后可在列表中一键连接。'
+      : '修改“${s.displayName}”的连接设置，保存后对新打开的连接生效。';
+
   @override
   Widget build(BuildContext context) {
     final tabs = isVnc
-        ? const [Tab(text: '常规'), Tab(text: 'SSH 隧道')]
-        : const [
-            Tab(text: '常规'),
-            Tab(text: '高级'),
-            Tab(text: '代理'),
-            Tab(text: '跳板机'),
-            Tab(text: '隧道'),
-          ];
+        ? const ['常规', 'SSH 隧道']
+        : const ['常规', '高级', '代理', '跳板机', '隧道'];
     final views = isVnc
         ? [_general(), _jump()]
         : [_general(), _advanced(), _proxy(), _jump(), _forwards()];
+    final body = Form(key: _form, child: TabBarView(children: views));
+
+    if (!isWide(context)) {
+      return DefaultTabController(
+        length: tabs.length,
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(_title),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilledButton(onPressed: _save, child: const Text('保存')),
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: AppTabBar(tabs: tabs, scrollable: true),
+              ),
+              Expanded(child: body),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final cs = Theme.of(context).colorScheme;
     return DefaultTabController(
       length: tabs.length,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          title: Text(widget.isNew
-              ? (isVnc ? '新建 VNC 远程桌面' : '新建 SSH 连接')
-              : '编辑会话'),
-          automaticallyImplyLeading: !isWide(context),
-          actions: [
-            if (isWide(context))
-              TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('取消')),
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilledButton(onPressed: _save, child: const Text('保存')),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 22, 20, 0),
+            child: AppDialogHeader(title: _title, description: _description),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 18, 24, 4),
+            child: AppTabBar(tabs: tabs),
+          ),
+          Expanded(child: body),
+          Container(
+            padding: const EdgeInsets.fromLTRB(24, 14, 24, 16),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: cs.outlineVariant)),
             ),
-          ],
-          bottom: TabBar(tabs: tabs, isScrollable: !isWide(context)),
-        ),
-        body: Form(
-          key: _form,
-          child: TabBarView(children: views),
-        ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                AppButton(
+                    label: '取消', onPressed: () => Navigator.pop(context)),
+                const SizedBox(width: 8),
+                AppButton(label: '保存', primary: true, onPressed: _save),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _pad(List<Widget> children) => ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
         children: [
           for (final c in children)
-            Padding(padding: const EdgeInsets.only(bottom: 12), child: c),
+            Padding(padding: const EdgeInsets.only(bottom: 16), child: c),
         ],
       );
+
+  Widget _field(
+    String label,
+    TextEditingController controller, {
+    String? hint,
+    bool obscure = false,
+    Widget? suffix,
+    int maxLines = 1,
+    int? minLines,
+    TextStyle? style,
+    bool digits = false,
+    String? Function(String?)? validator,
+  }) {
+    return LabeledField(
+      label: label,
+      child: TextFormField(
+        controller: controller,
+        obscureText: obscure,
+        maxLines: obscure ? 1 : maxLines,
+        minLines: minLines,
+        style: style ?? const TextStyle(fontSize: 14),
+        keyboardType: digits ? TextInputType.number : null,
+        inputFormatters:
+            digits ? [FilteringTextInputFormatter.digitsOnly] : null,
+        validator: validator,
+        decoration: InputDecoration(hintText: hint, suffixIcon: suffix),
+      ),
+    );
+  }
+
+  Widget _note(String text) => Text(text,
+      style: TextStyle(
+          fontSize: 13,
+          height: 1.5,
+          color: Theme.of(context).colorScheme.onSurfaceVariant));
 
   Widget _groupPicker() {
     final store = context.watch<AppStore>();
@@ -149,91 +220,68 @@ class _SessionEditorState extends State<SessionEditor> {
 
   Widget _general() {
     return _pad([
-      TextFormField(
-        controller: _name,
-        decoration: const InputDecoration(labelText: '名称', hintText: '留空则显示主机地址'),
-      ),
+      _field('名称', _name, hint: '留空则显示主机地址'),
       Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             flex: 3,
-            child: TextFormField(
-              controller: _host,
-              decoration: const InputDecoration(labelText: '主机'),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? '请输入主机地址' : null,
-            ),
+            child: _field('主机', _host,
+                hint: 'IP 或域名',
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? '请输入主机地址' : null),
           ),
           const SizedBox(width: 12),
-          Expanded(
-            child: TextFormField(
-              controller: _port,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(labelText: '端口'),
-            ),
-          ),
+          Expanded(child: _field('端口', _port, digits: true)),
         ],
       ),
       if (!isVnc) ...[
-        TextFormField(
-          controller: _user,
-          decoration: const InputDecoration(labelText: '用户名'),
-        ),
-        SegmentedButton<AuthType>(
-          segments: const [
-            ButtonSegment(value: AuthType.password, label: Text('密码'), icon: Icon(Icons.password)),
-            ButtonSegment(value: AuthType.key, label: Text('公钥'), icon: Icon(Icons.vpn_key)),
-          ],
-          selected: {s.authType},
-          onSelectionChanged: (v) => setState(() => s.authType = v.first),
+        _field('用户名', _user, hint: '例如：root'),
+        LabeledField(
+          label: '认证方式',
+          child: AppSegmented<AuthType>(
+            value: s.authType,
+            options: const [
+              (value: AuthType.password, label: '密码', icon: Icons.password),
+              (value: AuthType.key, label: '公钥', icon: Icons.vpn_key_outlined),
+            ],
+            onChanged: (v) => setState(() => s.authType = v),
+          ),
         ),
       ],
       if (isVnc || s.authType == AuthType.password)
-        TextFormField(
-          controller: _password,
-          obscureText: !_showPassword,
-          decoration: InputDecoration(
-            labelText: isVnc ? 'VNC 密码' : '密码',
-            suffixIcon: IconButton(
-              icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
-              onPressed: () => setState(() => _showPassword = !_showPassword),
-            ),
+        _field(
+          isVnc ? 'VNC 密码' : '密码',
+          _password,
+          obscure: !_showPassword,
+          suffix: IconButton(
+            iconSize: 18,
+            icon: Icon(_showPassword
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined),
+            onPressed: () => setState(() => _showPassword = !_showPassword),
           ),
         ),
       if (!isVnc && s.authType == AuthType.key) ...[
-        TextFormField(
-          controller: _key,
+        _field(
+          '私钥（OpenSSH / PEM 格式）',
+          _key,
           maxLines: 6,
           minLines: 4,
+          hint: '-----BEGIN OPENSSH PRIVATE KEY-----',
           style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          decoration: InputDecoration(
-            labelText: '私钥（OpenSSH / PEM 格式）',
-            alignLabelWithHint: true,
-            suffixIcon: IconButton(
-              tooltip: '从文件导入',
-              icon: const Icon(Icons.file_open_outlined),
-              onPressed: _importKey,
-            ),
+          suffix: IconButton(
+            tooltip: '从文件导入',
+            iconSize: 18,
+            icon: const Icon(Icons.file_open_outlined),
+            onPressed: _importKey,
           ),
         ),
-        TextFormField(
-          controller: _passphrase,
-          obscureText: true,
-          decoration: const InputDecoration(labelText: '私钥密码（可选）'),
-        ),
-        TextFormField(
-          controller: _password,
-          obscureText: true,
-          decoration: const InputDecoration(
-              labelText: '登录密码（可选，公钥失败时尝试）'),
-        ),
+        _field('私钥密码（可选）', _passphrase, obscure: true),
+        _field('登录密码（可选，公钥失败时尝试）', _password, obscure: true),
       ],
       _groupPicker(),
-      TextFormField(
-        controller: _desc,
-        decoration: const InputDecoration(labelText: '备注'),
-      ),
+      _field('备注', _desc, hint: '可选'),
     ]);
   }
 
@@ -248,18 +296,11 @@ class _SessionEditorState extends State<SessionEditor> {
         ],
         onChanged: (v) => setState(() => s.charset = v),
       ),
-      TextFormField(
-        controller: _init,
-        maxLines: 3,
-        minLines: 1,
-        decoration: const InputDecoration(
-          labelText: '登录后自动执行的命令',
-          hintText: '例如：cd /var/www && ls',
-        ),
-      ),
+      _field('登录后自动执行的命令', _init,
+          maxLines: 3, minLines: 1, hint: '例如：cd /var/www && ls'),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('兼容旧服务器算法'),
+        title: const Text('兼容旧服务器算法', style: TextStyle(fontSize: 14)),
         subtitle: const Text(
             '启用 ssh-rsa(SHA1)、diffie-hellman-group1/14-sha1、CBC 等旧算法，仅在老旧设备连接失败时开启'),
         value: s.legacyAlgorithms,
@@ -271,51 +312,38 @@ class _SessionEditorState extends State<SessionEditor> {
   Widget _proxy() {
     final p = s.proxy;
     return _pad([
-      SegmentedButton<ProxyType>(
-        segments: const [
-          ButtonSegment(value: ProxyType.none, label: Text('不使用')),
-          ButtonSegment(value: ProxyType.http, label: Text('HTTP')),
-          ButtonSegment(value: ProxyType.socks5, label: Text('SOCKS5')),
-        ],
-        selected: {p.type},
-        onSelectionChanged: (v) => setState(() => p.type = v.first),
+      LabeledField(
+        label: '代理类型',
+        child: AppSegmented<ProxyType>(
+          value: p.type,
+          options: const [
+            (value: ProxyType.none, label: '不使用', icon: null),
+            (value: ProxyType.http, label: 'HTTP', icon: null),
+            (value: ProxyType.socks5, label: 'SOCKS5', icon: null),
+          ],
+          onChanged: (v) => setState(() => p.type = v),
+        ),
       ),
       if (p.type != ProxyType.none) ...[
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               flex: 3,
-              child: TextFormField(
-                controller: _pHost,
-                decoration: const InputDecoration(labelText: '代理主机'),
-                validator: (v) => p.type != ProxyType.none &&
-                        (v == null || v.trim().isEmpty)
-                    ? '请输入代理主机'
-                    : null,
-              ),
+              child: _field('代理主机', _pHost,
+                  validator: (v) => p.type != ProxyType.none &&
+                          (v == null || v.trim().isEmpty)
+                      ? '请输入代理主机'
+                      : null),
             ),
             const SizedBox(width: 12),
-            Expanded(
-              child: TextFormField(
-                controller: _pPort,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: '端口'),
-              ),
-            ),
+            Expanded(child: _field('端口', _pPort, digits: true)),
           ],
         ),
-        TextFormField(
-          controller: _pUser,
-          decoration: const InputDecoration(labelText: '用户名（可选）'),
-        ),
-        TextFormField(
-          controller: _pPass,
-          obscureText: true,
-          decoration: const InputDecoration(labelText: '密码（可选）'),
-        ),
+        _field('用户名（可选）', _pUser),
+        _field('密码（可选）', _pPass, obscure: true),
       ],
-      const Text('使用跳板机时将忽略代理设置。', style: TextStyle(fontSize: 12)),
+      _note('使用跳板机时将忽略代理设置。'),
     ]);
   }
 
@@ -325,9 +353,6 @@ class _SessionEditorState extends State<SessionEditor> {
         .where((x) => x.id != s.id && x.type == SessionType.ssh)
         .toList();
     return _pad([
-      Text(isVnc
-          ? '通过一个已保存的 SSH 会话建立隧道，再连接上面填写的 VNC 地址（地址相对于 SSH 服务器）。'
-          : '先登录跳板机，再经由跳板机连接目标主机（相当于 ssh -J）。目标主机地址相对于跳板机。'),
       AppDropdown<String?>(
         label: isVnc ? 'SSH 隧道会话' : '跳板机',
         value: store.sessionById(s.jumpSessionId)?.id,
@@ -338,63 +363,84 @@ class _SessionEditorState extends State<SessionEditor> {
         ],
         onChanged: (v) => setState(() => s.jumpSessionId = v),
       ),
+      _note(isVnc
+          ? '通过一个已保存的 SSH 会话建立隧道，再连接上面填写的 VNC 地址（地址相对于 SSH 服务器）。'
+          : '先登录跳板机，再经由跳板机连接目标主机（相当于 ssh -J）。目标主机地址相对于跳板机。'),
     ]);
   }
 
   Widget _forwards() {
+    final cs = Theme.of(context).colorScheme;
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
           child: Row(
             children: [
-              const Expanded(child: Text('连接成功后自动启动以下转发规则')),
-              FilledButton.tonalIcon(
+              Expanded(child: _note('连接成功后自动启动以下转发规则')),
+              AppButton(
+                label: '添加',
+                icon: Icons.add,
                 onPressed: () async {
                   final f = await showForwardEditor(context, PortForward());
                   if (f != null) setState(() => s.forwards.add(f));
                 },
-                icon: const Icon(Icons.add),
-                label: const Text('添加'),
               ),
             ],
           ),
         ),
         Expanded(
-          child: ListView(
-            children: [
-              for (final f in s.forwards)
-                ListTile(
-                  leading: Checkbox(
-                    value: f.enabled,
-                    onChanged: (v) => setState(() => f.enabled = v ?? true),
-                  ),
-                  title: Text(f.label),
-                  subtitle: f.note.isEmpty ? null : Text(f.note),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () async {
-                          final r = await showForwardEditor(context, f.copy());
-                          if (r != null) {
-                            setState(() {
-                              final i = s.forwards.indexWhere((x) => x.id == f.id);
-                              s.forwards[i] = r;
-                            });
-                          }
-                        },
+          child: s.forwards.isEmpty
+              ? Center(child: _note('暂无转发规则'))
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                  children: [
+                    for (final f in s.forwards)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: cs.outlineVariant),
+                        ),
+                        child: ListTile(
+                          leading: Checkbox(
+                            value: f.enabled,
+                            onChanged: (v) =>
+                                setState(() => f.enabled = v ?? true),
+                          ),
+                          title: Text(f.label,
+                              style: const TextStyle(fontSize: 14)),
+                          subtitle: f.note.isEmpty ? null : Text(f.note),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                iconSize: 18,
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () async {
+                                  final r = await showForwardEditor(
+                                      context, f.copy());
+                                  if (r != null) {
+                                    setState(() {
+                                      final i = s.forwards
+                                          .indexWhere((x) => x.id == f.id);
+                                      s.forwards[i] = r;
+                                    });
+                                  }
+                                },
+                              ),
+                              IconButton(
+                                iconSize: 18,
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () =>
+                                    setState(() => s.forwards.remove(f)),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => setState(() => s.forwards.remove(f)),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
-            ],
-          ),
         ),
       ],
     );
@@ -407,95 +453,37 @@ Future<PortForward?> showForwardEditor(BuildContext context, PortForward f) {
   final destHost = TextEditingController(text: f.destHost);
   final destPort = TextEditingController(text: f.destPort == 0 ? '' : '${f.destPort}');
   final note = TextEditingController(text: f.note);
+
+  Widget field(String label, TextEditingController c, {bool digits = false}) =>
+      LabeledField(
+        label: label,
+        child: TextField(
+          controller: c,
+          style: const TextStyle(fontSize: 14),
+          keyboardType: digits ? TextInputType.number : null,
+          inputFormatters:
+              digits ? [FilteringTextInputFormatter.digitsOnly] : null,
+        ),
+      );
+
   return showDialog<PortForward>(
     context: context,
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setState) {
         final isRemote = f.type == ForwardType.remote;
-        return AlertDialog(
-          title: const Text('端口转发'),
-          content: SizedBox(
-            width: 460,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SegmentedButton<ForwardType>(
-                  segments: const [
-                    ButtonSegment(value: ForwardType.local, label: Text('本地(-L)')),
-                    ButtonSegment(value: ForwardType.remote, label: Text('远程(-R)')),
-                    ButtonSegment(value: ForwardType.dynamic, label: Text('动态(-D)')),
-                  ],
-                  selected: {f.type},
-                  onSelectionChanged: (v) => setState(() => f.type = v.first),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  switch (f.type) {
-                    ForwardType.local => '本机监听端口，连接会经 SSH 转发到远程可访问的目标地址。',
-                    ForwardType.remote => '服务器上监听端口，连接会经 SSH 转发到本机可访问的目标地址。',
-                    ForwardType.dynamic => '本机启动 SOCKS5 代理，所有流量经由 SSH 服务器发出。',
-                  },
-                  style: const TextStyle(fontSize: 12),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: TextField(
-                        controller: bindHost,
-                        decoration: InputDecoration(
-                            labelText: isRemote ? '服务器监听地址' : '本机监听地址'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      flex: 2,
-                      child: TextField(
-                        controller: bindPort,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                        decoration: const InputDecoration(labelText: '监听端口'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (f.type != ForwardType.dynamic) ...[
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: TextField(
-                          controller: destHost,
-                          decoration: const InputDecoration(labelText: '目标地址'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        flex: 2,
-                        child: TextField(
-                          controller: destPort,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                          decoration: const InputDecoration(labelText: '目标端口'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 12),
-                TextField(
-                  controller: note,
-                  decoration: const InputDecoration(labelText: '备注（可选）'),
-                ),
-              ],
-            ),
-          ),
+        return AppDialog(
+          title: '端口转发',
+          description: switch (f.type) {
+            ForwardType.local => '本机监听端口，连接会经 SSH 转发到远程可访问的目标地址。',
+            ForwardType.remote => '服务器上监听端口，连接会经 SSH 转发到本机可访问的目标地址。',
+            ForwardType.dynamic => '本机启动 SOCKS5 代理，所有流量经由 SSH 服务器发出。',
+          },
+          width: 480,
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-            FilledButton(
+            AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
+            AppButton(
+              label: '确定',
+              primary: true,
               onPressed: () {
                 final bp = int.tryParse(bindPort.text) ?? 0;
                 final dp = int.tryParse(destPort.text) ?? 0;
@@ -511,9 +499,53 @@ Future<PortForward?> showForwardEditor(BuildContext context, PortForward f) {
                   ..note = note.text.trim();
                 Navigator.pop(ctx, f);
               },
-              child: const Text('确定'),
             ),
           ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AppSegmented<ForwardType>(
+                  value: f.type,
+                  options: const [
+                    (value: ForwardType.local, label: '本地 (-L)', icon: null),
+                    (value: ForwardType.remote, label: '远程 (-R)', icon: null),
+                    (value: ForwardType.dynamic, label: '动态 (-D)', icon: null),
+                  ],
+                  onChanged: (v) => setState(() => f.type = v),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: field(
+                          isRemote ? '服务器监听地址' : '本机监听地址', bindHost),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        flex: 2,
+                        child: field('监听端口', bindPort, digits: true)),
+                  ],
+                ),
+                if (f.type != ForwardType.dynamic) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(flex: 3, child: field('目标地址', destHost)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                          flex: 2,
+                          child: field('目标端口', destPort, digits: true)),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 16),
+                field('备注（可选）', note),
+              ],
+            ),
+          ),
         );
       },
     ),

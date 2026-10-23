@@ -1,6 +1,9 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import 'shad.dart';
+
+export 'shad.dart';
 
 String formatBytes(num bytes, {int digits = 1}) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -48,23 +51,13 @@ Future<void> copyText(BuildContext context, String text, {String? tip}) async {
   if (context.mounted) showToast(context, tip ?? '已复制到剪贴板');
 }
 
-/// 统一的圆角标题样式：使用系统字体，保证中文标题完整显示、不被裁剪。
-Widget _dialogTitle(BuildContext context, String title) => Text(
-      title,
-      textAlign: TextAlign.center,
-      style: TextStyle(
-        fontSize: 17,
-        fontWeight: FontWeight.w600,
-        color: Theme.of(context).colorScheme.onSurface,
-      ),
-    );
-
 Future<String?> promptText(
   BuildContext context, {
   required String title,
   String initial = '',
   String? label,
   String? hint,
+  String? description,
   bool obscure = false,
   int maxLines = 1,
   String okText = '确定',
@@ -73,53 +66,30 @@ Future<String?> promptText(
   return showDialog<String>(
     context: context,
     barrierDismissible: true,
-    builder: (ctx) => Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 380),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _dialogTitle(ctx, title),
-              const SizedBox(height: 18),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                obscureText: obscure,
-                maxLines: obscure ? 1 : maxLines,
-                minLines: 1,
-                decoration: InputDecoration(
-                  labelText: label,
-                  hintText: hint,
-                  isDense: true,
-                ),
-                onSubmitted:
-                    maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消')),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                        onPressed: () => Navigator.pop(ctx, ctrl.text),
-                        child: Text(okText)),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
+    builder: (ctx) {
+      final field = TextField(
+        controller: ctrl,
+        autofocus: true,
+        obscureText: obscure,
+        maxLines: obscure ? 1 : maxLines,
+        minLines: 1,
+        decoration: InputDecoration(hintText: hint),
+        onSubmitted: maxLines == 1 ? (v) => Navigator.pop(ctx, v) : null,
+      );
+      return AppDialog(
+        title: title,
+        description: description,
+        width: 420,
+        actions: [
+          AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
+          AppButton(
+              label: okText,
+              primary: true,
+              onPressed: () => Navigator.pop(ctx, ctrl.text)),
+        ],
+        child: label == null ? field : LabeledField(label: label, child: field),
+      );
+    },
   );
 }
 
@@ -133,95 +103,21 @@ Future<bool> confirm(
   final r = await showDialog<bool>(
     context: context,
     barrierDismissible: true,
-    builder: (ctx) {
-      final cs = Theme.of(ctx).colorScheme;
-      return Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 380),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _dialogTitle(ctx, title),
-                if (message != null) ...[
-                  const SizedBox(height: 12),
-                  Text(message,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.4,
-                          color: cs.onSurfaceVariant)),
-                ],
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('取消')),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton(
-                        style: danger
-                            ? FilledButton.styleFrom(
-                                backgroundColor: cs.error,
-                                foregroundColor: cs.onError)
-                            : null,
-                        onPressed: () => Navigator.pop(ctx, true),
-                        child: Text(okText),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    },
+    builder: (ctx) => AppDialog(
+      title: title,
+      description: message,
+      width: 420,
+      actions: [
+        AppButton(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
+        AppButton(
+            label: okText,
+            primary: true,
+            danger: danger,
+            onPressed: () => Navigator.pop(ctx, true)),
+      ],
+    ),
   );
   return r ?? false;
-}
-
-/// 统一风格的下拉选择框：普通下拉行为，圆角菜单、配色跟随主题。
-class AppDropdown<T> extends StatelessWidget {
-  const AppDropdown({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final String label;
-  final T value;
-  final List<({T value, String label})> options;
-  final ValueChanged<T> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return DropdownButtonFormField<T>(
-      initialValue: value,
-      isExpanded: true,
-      decoration: InputDecoration(labelText: label),
-      borderRadius: BorderRadius.circular(12),
-      dropdownColor: cs.surfaceContainerHigh,
-      icon: Icon(CupertinoIcons.chevron_down,
-          size: 15, color: cs.onSurfaceVariant),
-      items: [
-        for (final o in options)
-          DropdownMenuItem(
-              value: o.value,
-              child: Text(o.label, overflow: TextOverflow.ellipsis)),
-      ],
-      onChanged: (v) => onChanged(v as T),
-    );
-  }
 }
 
 class SectionTitle extends StatelessWidget {

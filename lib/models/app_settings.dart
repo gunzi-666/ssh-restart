@@ -4,6 +4,9 @@ class AppSettings {
   AppThemeMode themeMode;
   int accentColor;
 
+  /// 界面风格：default / fluent / antd。
+  String uiStyle;
+
   double terminalFontSize;
   String terminalFontFamily;
   String terminalTheme;
@@ -38,6 +41,7 @@ class AppSettings {
   AppSettings({
     this.themeMode = AppThemeMode.system,
     this.accentColor = 0xFF007AFF,
+    this.uiStyle = 'default',
     this.terminalFontSize = 14,
     this.terminalFontFamily = '',
     this.terminalTheme = 'FinalShell 暗色',
@@ -70,6 +74,7 @@ class AppSettings {
   Map<String, dynamic> toJson() => {
         'themeMode': themeMode.name,
         'accentColor': accentColor,
+        'uiStyle': uiStyle,
         'terminalFontSize': terminalFontSize,
         'terminalFontFamily': terminalFontFamily,
         'terminalTheme': terminalTheme,
@@ -103,6 +108,7 @@ class AppSettings {
   Map<String, dynamic> toPortableJson() => {
         'themeMode': themeMode.name,
         'accentColor': accentColor,
+        'uiStyle': uiStyle,
         'terminalFontSize': terminalFontSize,
         'terminalFontFamily': terminalFontFamily,
         'terminalTheme': terminalTheme,
@@ -121,6 +127,7 @@ class AppSettings {
     final s = AppSettings.fromJson({...toJson(), ...j});
     themeMode = s.themeMode;
     accentColor = s.accentColor;
+    uiStyle = s.uiStyle;
     terminalFontSize = s.terminalFontSize;
     terminalFontFamily = s.terminalFontFamily;
     terminalTheme = s.terminalTheme;
@@ -140,6 +147,7 @@ class AppSettings {
             (e) => e.name == j['themeMode'],
             orElse: () => AppThemeMode.system),
         accentColor: j['accentColor'] as int? ?? 0xFF007AFF,
+        uiStyle: j['uiStyle'] as String? ?? 'default',
         terminalFontSize: (j['terminalFontSize'] as num?)?.toDouble() ?? 14,
         terminalFontFamily: j['terminalFontFamily'] as String? ?? '',
         terminalTheme: j['terminalTheme'] as String? ?? 'FinalShell 暗色',
