@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/app_settings.dart';
 import '../models/session_config.dart';
@@ -15,9 +16,11 @@ import '../services/backup_crypto.dart';
 import '../services/backup_manager.dart';
 import '../services/finalshell_import.dart';
 import '../services/gdrive_service.dart';
+import '../services/updater.dart';
 import 'app_style.dart';
 import 'data_dialogs.dart';
 import 'terminal_themes.dart';
+import 'update_dialog.dart';
 import 'widgets/common.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -1311,8 +1314,32 @@ class _About extends StatelessWidget {
                   children: [
                     Text('SSH Restart',
                         style: Theme.of(context).textTheme.headlineSmall),
-                    const Text('版本 1.0.0'),
+                    FutureBuilder<String>(
+                      future: Updater.currentVersion(),
+                      builder: (_, s) => Text('版本 ${s.data ?? '…'}'),
+                    ),
                   ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                AppButton(
+                  label: '检查更新',
+                  icon: Icons.system_update_alt_rounded,
+                  primary: true,
+                  onPressed: () => showUpdateDialog(context),
+                ),
+                AppButton(
+                  label: 'GitHub 仓库',
+                  icon: Icons.open_in_new_rounded,
+                  onPressed: () => launchUrl(
+                    Uri.parse('https://github.com/${Updater.repo}'),
+                    mode: LaunchMode.externalApplication,
+                  ),
                 ),
               ],
             ),
