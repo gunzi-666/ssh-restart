@@ -20,6 +20,7 @@
 - [功能特性](#功能特性)
 - [下载](#下载)
 - [从源码构建](#从源码构建)
+- [从 FinalShell 迁移](#从-finalshell-迁移)
 - [谷歌云盘备份配置](#谷歌云盘备份配置)
 - [加密备份说明](#加密备份说明)
 - [技术栈](#技术栈)
@@ -28,8 +29,15 @@
 
 ## 功能特性
 
+**服务器管理**
+- 首页服务器列表，支持列表 / 卡片两种视图、分页、按名称 / 地址 / 认证方式 / 最近连接排序
+- 收藏、最近连接、多级分组（支持拖拽服务器到分组）
+- 全局搜索（`Ctrl K` / `⌘ K`），按认证方式、连接类型筛选
+- 一键连接、一键复制连接信息（IP / 端口 / 用户名 / 密码）
+
 **SSH 终端**
 - 多标签页、断线自动重连、复制/粘贴、选中即复制、右键粘贴
+- 终端内直接输入，完整支持交互式脚本
 - 可自定义字体、字号与配色主题
 - 命令输入框、历史命令、快捷命令、向所有标签广播命令
 
@@ -49,7 +57,12 @@
 **SFTP 文件管理**
 - 上传 / 下载队列
 - 新建 / 重命名 / 删除、权限与属主修改、压缩 / 解压
-- 在线编辑，可选「跟随终端目录」
+- 可选「跟随终端目录」
+
+**内置代码编辑器**
+- 在 SSH 标签内以子标签打开远程文件，可同时编辑多个文件
+- 行号、按扩展名自动语法高亮、查找替换
+- 缩略图（minimap）、行书签、`Ctrl S` 保存
 
 **VNC 远程桌面**
 - 纯 Dart 实现的 RFB 协议，支持直连或经 SSH 隧道连接
@@ -57,9 +70,15 @@
 **加密备份与同步**
 - 会话、密码、私钥、分组、快捷命令、设置等全部用你设定的密钥本地加密
 - 可导出到文件，或上传到谷歌云盘；其他设备用相同密钥即可导入
+- 支持从 FinalShell 一键导入服务器（自动解密密码、还原分组与私钥）
+
+**界面与主题**
+- 三套内置界面风格：默认（shadcn/ui）、Fluent（Windows 11）、Ant Design，设置中一键切换
+- 亮色 / 暗色 / 跟随系统，可自定义主题色
 
 **跨平台**
-- Windows、macOS、Android（iOS 规划中），桌面端采用自绘标题栏
+- Windows、macOS、Android（iOS 规划中）
+- Windows 采用自绘标题栏，macOS 使用系统原生标题栏
 
 ## 下载
 
@@ -85,7 +104,20 @@ flutter run -d windows   # 或 macos / <Android 设备>
 flutter build windows
 flutter build macos
 flutter build apk --release
+
+# 单元测试
+flutter test
 ```
+
+## 从 FinalShell 迁移
+
+在「设置 → 备份与同步 → 从 FinalShell 导入」中选择以下任意一种来源：
+
+- 自动检测到的 FinalShell 数据目录（Windows：`%LOCALAPPDATA%\finalshell`；macOS：`~/Library/FinalShell`）
+- 手动选择 FinalShell 目录或其中的 `conn` 文件夹
+- 包含连接配置的 `.zip` 或 `.json` 文件（可多选）
+
+导入前会显示预览：识别到的服务器数量、密码解密结果、分组与私钥匹配情况。导入采用合并方式，主机、端口、用户名相同的服务器会自动跳过，不会修改本机已有数据。目前仅导入 SSH 连接。
 
 ## 谷歌云盘备份配置
 
@@ -107,7 +139,7 @@ flutter build apk --release
 
 ## 技术栈
 
-Flutter · dartssh2 · xterm.dart · googleapis · cryptography · pointycastle · window_manager
+Flutter · dartssh2 · xterm.dart · re_editor · googleapis · cryptography · pointycastle · archive · window_manager
 
 ## 常见问题
 
