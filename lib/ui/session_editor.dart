@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../models/session_config.dart';
 import '../services/app_store.dart';
+import 'session_picker.dart';
 import 'widgets/common.dart';
 
 Future<SessionConfig?> showSessionEditor(BuildContext context, SessionConfig s,
@@ -349,18 +350,12 @@ class _SessionEditorState extends State<SessionEditor> {
 
   Widget _jump() {
     final store = context.watch<AppStore>();
-    final candidates = store.sessions
-        .where((x) => x.id != s.id && x.type == SessionType.ssh)
-        .toList();
     return _pad([
-      AppDropdown<String?>(
+      SessionPickerField(
         label: isVnc ? 'SSH 隧道会话' : '跳板机',
+        title: isVnc ? '选择 SSH 隧道会话' : '选择跳板机',
         value: store.sessionById(s.jumpSessionId)?.id,
-        options: [
-          (value: null, label: '不使用'),
-          for (final c in candidates)
-            (value: c.id, label: '${c.displayName}  (${c.username}@${c.host})'),
-        ],
+        excludeId: s.id,
         onChanged: (v) => setState(() => s.jumpSessionId = v),
       ),
       _note(isVnc

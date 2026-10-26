@@ -104,6 +104,32 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   bool get _isMac => !kIsWeb && Platform.isMacOS;
 
   @override
+  void initState() {
+    super.initState();
+    _restoreScope();
+  }
+
+  void _restoreScope() {
+    final store = context.read<AppStore>();
+    final raw = store.settings.homeScope;
+    final i = raw.indexOf(':');
+    final name = i < 0 ? raw : raw.substring(0, i);
+    final id = i < 0 ? null : raw.substring(i + 1);
+    final scope = _Scope.values.where((e) => e.name == name).firstOrNull;
+    if (scope == null) return;
+    if (scope == _Scope.group && store.groupById(id) == null) return;
+    if (scope == _Scope.session && store.sessionById(id) == null) return;
+    _scope = scope;
+    _groupId = scope == _Scope.group ? id : null;
+    _sessionId = scope == _Scope.session ? id : null;
+    if (scope == _Scope.session) _selectedId = id;
+    if (scope == _Scope.recent) {
+      _sort = _SortKey.recent;
+      _asc = false;
+    }
+  }
+
+  @override
   void dispose() {
     _search.dispose();
     _searchFocus.dispose();
@@ -129,6 +155,10 @@ class _ServerHomeViewState extends State<ServerHomeView> {
         _scope = scope;
         _groupId = groupId;
         _sessionId = sessionId;
+        final id = groupId ?? sessionId;
+        store.persistSettings(
+          (x) => x.homeScope = id == null ? scope.name : '${scope.name}:$id',
+        );
       });
 
   void _focusSearch() {
@@ -1881,15 +1911,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                           ),
                         ),
                         const SizedBox(height: 2),
-                        Text(
-                          sub,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
+                        _subtitleWithNote(s, sub),
                       ],
                     ),
                   ),
@@ -1939,6 +1961,44 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 列表行第二行：用户名，后面跟备注（悬停显示完整备注）。
+  Widget _subtitleWithNote(SessionConfig s, String sub) {
+    final cs = Theme.of(context).colorScheme;
+    final note = s.description.trim().replaceAll(RegExp(r'\s*\n\s*'), '  ');
+    final style = TextStyle(fontSize: 12, color: cs.onSurfaceVariant);
+    final text = Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: sub),
+          if (note.isNotEmpty) ...[
+            const TextSpan(text: '  ·  '),
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 3),
+                child: Icon(
+                  Icons.sticky_note_2_outlined,
+                  size: 12,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ),
+            TextSpan(text: note),
+          ],
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: style,
+    );
+    if (note.isEmpty) return text;
+    return Tooltip(
+      message: s.description.trim(),
+      waitDuration: const Duration(milliseconds: 400),
+      child: text,
     );
   }
 
@@ -2034,6 +2094,37 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                     ),
                   ),
                 ),
+                if (s.description.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Tooltip(
+                    message: s.description.trim(),
+                    waitDuration: const Duration(milliseconds: 400),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.sticky_note_2_outlined,
+                          size: 13,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            s.description.trim().replaceAll(
+                              RegExp(r'\s*\n\s*'),
+                              '  ',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Row(
                   children: [

@@ -26,6 +26,9 @@ class AppSettings {
   double sidebarWidth;
   List<String> expandedGroups;
 
+  /// 首页左侧上次选中的项，如 `all`、`group:<id>`、`session:<id>`，仅保存在本机。
+  String homeScope;
+
   /// 桌面端窗口位置与大小 [x, y, 宽, 高]（未最大化时的尺寸），仅保存在本机。
   List<double> windowBounds;
   bool windowMaximized;
@@ -65,6 +68,7 @@ class AppSettings {
     this.confirmOnCloseTab = true,
     this.sidebarWidth = 232,
     List<String>? expandedGroups,
+    this.homeScope = 'all',
     List<double>? windowBounds,
     this.windowMaximized = false,
     this.backupKey = '',
@@ -103,6 +107,7 @@ class AppSettings {
         'confirmOnCloseTab': confirmOnCloseTab,
         'sidebarWidth': sidebarWidth,
         'expandedGroups': expandedGroups,
+        'homeScope': homeScope,
         'windowBounds': windowBounds,
         'windowMaximized': windowMaximized,
         'backupKey': rememberBackupKey ? backupKey : '',
@@ -180,6 +185,7 @@ class AppSettings {
         confirmOnCloseTab: j['confirmOnCloseTab'] as bool? ?? true,
         sidebarWidth: (j['sidebarWidth'] as num?)?.toDouble() ?? 232,
         expandedGroups: (j['expandedGroups'] as List?)?.cast<String>().toList(),
+        homeScope: j['homeScope'] as String? ?? 'all',
         windowBounds: (j['windowBounds'] as List?)
             ?.map((e) => (e as num).toDouble())
             .toList(),
