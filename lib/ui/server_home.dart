@@ -1920,11 +1920,22 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                   flex: 4,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(
-                      '${s.host}:${s.port}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: _mono.copyWith(fontSize: 13, color: cs.onSurface),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            '${s.host}:${s.port}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: _mono.copyWith(
+                              fontSize: 13,
+                              color: cs.onSurface,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        _copyHostButton(s),
+                      ],
                     ),
                   ),
                 ),
@@ -1958,6 +1969,27 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 地址后的小按钮：只复制主机（IP 或域名），不带端口。
+  Widget _copyHostButton(SessionConfig s) {
+    final cs = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: '复制 IP（不含端口）',
+      waitDuration: const Duration(milliseconds: 400),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: () => copyText(context, s.host, tip: '已复制 ${s.host}'),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(
+            Icons.content_copy_rounded,
+            size: 13,
+            color: cs.onSurfaceVariant,
           ),
         ),
       ),
@@ -2084,14 +2116,22 @@ class _ServerHomeViewState extends State<ServerHomeView> {
                 const SizedBox(height: 8),
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    sub,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _mono.copyWith(
-                      fontSize: 12.5,
-                      color: cs.onSurfaceVariant,
-                    ),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          sub,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: _mono.copyWith(
+                            fontSize: 12.5,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      _copyHostButton(s),
+                    ],
                   ),
                 ),
                 if (s.description.trim().isNotEmpty) ...[

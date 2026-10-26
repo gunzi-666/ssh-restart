@@ -36,16 +36,146 @@ String formatDateTime(DateTime? t) {
 
 bool isWide(BuildContext context) => MediaQuery.sizeOf(context).width >= 900;
 
+OverlayEntry? _toastEntry;
+
+/// 顶部居中的轻提示：淡入并轻微下滑，自动消失；新提示会替换旧提示。
 void showToast(BuildContext context, String msg) {
-  final m = ScaffoldMessenger.maybeOf(context);
-  m?.hideCurrentSnackBar();
-  m?.showSnackBar(
-    SnackBar(
-      content: Text(msg),
-      behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 3),
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  if (overlay == null) return;
+  _toastEntry?.remove();
+  final error = RegExp('失败|错误|无法|不能|异常').hasMatch(msg);
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _Toast(
+      message: msg,
+      error: error,
+      onDone: () {
+        if (_toastEntry == entry) {
+          entry.remove();
+          _toastEntry = null;
+        }
+      },
     ),
   );
+  _toastEntry = entry;
+  overlay.insert(entry);
+}
+
+class _Toast extends StatefulWidget {
+  const _Toast({
+    required this.message,
+    required this.error,
+    required this.onDone,
+  });
+
+  final String message;
+  final bool error;
+  final VoidCallback onDone;
+
+  @override
+  State<_Toast> createState() => _ToastState();
+}
+
+class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+    reverseDuration: const Duration(milliseconds: 180),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    await _c.forward();
+    final ms = (1800 + widget.message.length * 40).clamp(1800, 4000);
+    await Future<void>.delayed(Duration(milliseconds: ms));
+    if (!mounted) return;
+    await _c.reverse();
+    if (mounted) widget.onDone();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final curve = CurvedAnimation(
+      parent: _c,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final accent = widget.error ? cs.error : const Color(0xFF22A06B);
+    return Positioned(
+      top: 52,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: FadeTransition(
+            opacity: curve,
+            child: SlideTransition(
+              position: Tween(
+                begin: const Offset(0, -0.4),
+                end: Offset.zero,
+              ).animate(curve),
+              child: ScaleTransition(
+                scale: Tween(begin: 0.96, end: 1.0).animate(curve),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Material(
+                    color: dark ? const Color(0xFF26272B) : Colors.white,
+                    elevation: 8,
+                    shadowColor: Colors.black.withValues(alpha: 0.35),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: BorderSide(color: cs.outlineVariant),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 9, 16, 9),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            widget.error
+                                ? Icons.error_outline_rounded
+                                : Icons.check_circle_rounded,
+                            size: 17,
+                            color: accent,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              widget.message,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: cs.onSurface,
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 Future<void> copyText(BuildContext context, String text, {String? tip}) async {
