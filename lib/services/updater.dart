@@ -234,41 +234,122 @@ class Updater {
       throw '安装包内容不正确：没有找到 $_exeName';
     }
 
-    String q(String s) => "'${s.replaceAll("'", "''")}'";
-    final script = File(p.join(work.path, 'install.ps1'));
+    // 与 v2rayN 的升级方式相同：由独立进程在主程序退出后覆盖文件。这里直接用新版本的
+    // 可执行文件充当升级程序，不借助任何脚本。
     final log = p.join(work.path, 'install.log');
-    final body =
-        '''
-\$ErrorActionPreference = 'Stop'
-\$src = ${q(extracted.path)}
-\$dst = ${q(installDir)}
-\$log = ${q(log)}
-Wait-Process -Id $pid -Timeout 60 -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
-\$ok = \$false
-for (\$i = 0; \$i -lt 20 -and -not \$ok; \$i++) {
-  try {
-    Copy-Item -Path (Join-Path \$src '*') -Destination \$dst -Recurse -Force
-    \$ok = \$true
-  } catch {
-    Add-Content -Path \$log -Value \$_.Exception.Message
-    Start-Sleep -Seconds 1
+    await File(log).writeAsString('');
+    await Process.start(
+      p.join(extracted.path, _exeName),
+      [applyFlag, installDir, log],
+      mode: ProcessStartMode.detached,
+      workingDirectory: extracted.path,
+    );
   }
-}
-Start-Process -FilePath (Join-Path \$dst ${q(_exeName)})
-if (\$ok) { Remove-Item -Path \$src -Recurse -Force -ErrorAction SilentlyContinue }
-''';
-    // Windows PowerShell 5.1 需要 BOM 才能正确读取脚本中的中文路径。
-    await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(body)]);
-    await Process.start('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-WindowStyle',
-      'Hidden',
-      '-File',
-      script.path,
-    ], mode: ProcessStartMode.detached);
+
+  static const applyFlag = '--apply-update';
+
+  /// 以升级模式启动时（`ssh_restart.exe --apply-update <安装目录> <日志>`）执行覆盖、
+  /// 打开新版本并结束进程；否则返回 false。必须在读取任何本地数据之前调用。
+  static Future<bool> runApplyIfRequested(List<String> args) async {
+    final i = args.indexOf(applyFlag);
+    if (i < 0 || i + 2 >= args.length || !Platform.isWindows) return false;
+    final dst = args[i + 1];
+    final log = File(args[i + 2]);
+    void write(String m) {
+      try {
+        final t = DateTime.now().toIso8601String().substring(11, 19);
+        log.writeAsStringSync('$t $m\n', mode: FileMode.append);
+      } catch (_) {}
+    }
+
+    final src = p.dirname(Platform.resolvedExecutable);
+    var ok = false;
+    try {
+      ok = await applyUpdate(src: src, dst: dst, log: write);
+    } catch (e) {
+      write('替换失败：$e');
+    }
+    try {
+      await Process.start(
+        p.join(dst, _exeName),
+        const [],
+        mode: ProcessStartMode.detached,
+        workingDirectory: dst,
+      );
+      write(ok ? '已启动新版本' : '替换未完成，已重新打开原程序');
+    } catch (e) {
+      write('启动程序失败：$e');
+    }
+    exit(0);
+  }
+
+  /// 等待 [dst] 中的旧程序退出（可执行文件可写），再把 [src] 的全部文件覆盖过去。
+  @visibleForTesting
+  static Future<bool> applyUpdate({
+    required String src,
+    required String dst,
+    required void Function(String) log,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    if (p.equals(src, dst)) throw '源目录与安装目录相同';
+    final target = File(p.join(dst, _exeName));
+    final deadline = DateTime.now().add(timeout);
+    log('等待原程序退出');
+    while (await target.exists()) {
+      try {
+        final f = await target.open(mode: FileMode.append);
+        await f.close();
+        break;
+      } on FileSystemException {
+        if (DateTime.now().isAfter(deadline)) {
+          log('等待超时：原程序仍在运行');
+          return false;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+    }
+
+    final files = Directory(
+      src,
+    ).listSync(recursive: true, followLinks: false).whereType<File>().toList();
+    for (final f in files) {
+      final out = File(p.join(dst, p.relative(f.path, from: src)));
+      for (var attempt = 1; ; attempt++) {
+        try {
+          await out.parent.create(recursive: true);
+          await f.copy(out.path);
+          break;
+        } on FileSystemException catch (e) {
+          if (attempt >= 20) {
+            log('复制失败：${out.path}：${e.message}');
+            return false;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+      }
+    }
+    log('文件替换完成（${files.length} 个文件）');
+    return true;
+  }
+
+  /// 正常启动时清理上次更新留下的安装包与解压目录（保留 install.log 便于排查）。
+  static Future<void> cleanupLeftovers() async {
+    if (!Platform.isWindows && !Platform.isMacOS) return;
+    try {
+      final dir = Directory(
+        p.join((await getTemporaryDirectory()).path, 'ssh_restart_update'),
+      );
+      if (!await dir.exists()) return;
+      if (p.isWithin(dir.path, Platform.resolvedExecutable)) return;
+      // 升级进程可能还在退出，稍等再删。
+      await Future<void>.delayed(const Duration(seconds: 5));
+      await for (final e in dir.list()) {
+        if (p.basename(e.path) == 'install.log') continue;
+        try {
+          await e.delete(recursive: true);
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   static Future<void> _prepareMacOS(

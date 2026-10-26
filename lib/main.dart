@@ -7,6 +7,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'services/app_store.dart';
 import 'services/backup_manager.dart';
+import 'services/updater.dart';
 import 'services/window_state.dart';
 import 'state/tabs_controller.dart';
 import 'ui/app.dart';
@@ -14,8 +15,10 @@ import 'ui/app.dart';
 bool get _isDesktop =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
+  if (await Updater.runApplyIfRequested(args)) return;
   WidgetsFlutterBinding.ensureInitialized();
+  unawaited(Updater.cleanupLeftovers());
   final store = AppStore();
   await store.load();
   // 桌面端：Windows/Linux 隐藏系统标题栏改用自绘标题栏；
