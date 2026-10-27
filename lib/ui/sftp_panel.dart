@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/app_store.dart';
 import '../services/ssh/sftp_service.dart';
 import '../state/ssh_tab.dart';
+import 'transfer_panel.dart';
 import 'widgets/common.dart';
 
 bool get _isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
@@ -36,6 +38,8 @@ class _SftpPanelState extends State<SftpPanel> {
   final Map<String, Timer> _watchers = {};
   int _sortCol = 0;
   bool _asc = true;
+  bool _dragging = false;
+  Timer? _barTimer;
 
   SftpService? get sftp => widget.tab.sftp;
 
@@ -49,6 +53,7 @@ class _SftpPanelState extends State<SftpPanel> {
   @override
   void dispose() {
     _followTimer?.cancel();
+    _barTimer?.cancel();
     for (final w in _watchers.values) {
       w.cancel();
     }
@@ -391,6 +396,195 @@ class _SftpPanelState extends State<SftpPanel> {
     if (!_isDesktop && !_selectMode) _open(s, e);
   }
 
+  Widget _dropOverlay(SftpService s) {
+    final cs = Theme.of(context).colorScheme;
+    return IgnorePointer(
+      child: Container(
+        margin: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: cs.primary.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: cs.primary, width: 2),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.cloud_upload_outlined, size: 40, color: cs.primary),
+            const SizedBox(height: 8),
+            Text(
+              '松开以上传到',
+              style: TextStyle(fontSize: 13, color: cs.onSurface),
+            ),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                s.currentPath,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: cs.primary,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '支持文件和文件夹',
+              style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 面板底部的上传汇总进度；全部完成后显示几秒再收起。
+  Widget _transferBar(SftpService s) {
+    final cs = Theme.of(context).colorScheme;
+    final batch = s.uploadBatch;
+    final active = s.uploadsActive;
+    final finishedAt = s.batchFinishedAt;
+    if (!active) {
+      if (batch.isEmpty || finishedAt == null) return const SizedBox.shrink();
+      final left = const Duration(seconds: 4) -
+          DateTime.now().difference(finishedAt);
+      if (left.isNegative) return const SizedBox.shrink();
+      _barTimer?.cancel();
+      _barTimer = Timer(left, () {
+        if (mounted) setState(() {});
+      });
+    }
+
+    var total = 0, sent = 0, done = 0, failed = 0, cancelled = 0;
+    var speed = 0.0;
+    for (final t in batch) {
+      total += t.total;
+      sent += t.state == TransferState.done ? t.total : t.transferred;
+      switch (t.state) {
+        case TransferState.done:
+          done++;
+        case TransferState.failed:
+          failed++;
+        case TransferState.cancelled:
+          cancelled++;
+        case TransferState.running:
+          speed += t.speed;
+        case TransferState.queued:
+          break;
+      }
+    }
+    final count = batch.length;
+    final progress = total > 0 ? (sent / total).clamp(0.0, 1.0) : null;
+
+    final String text;
+    final IconData icon;
+    final Color color;
+    if (active) {
+      icon = Icons.upload_rounded;
+      color = cs.primary;
+      text = s.scanning > 0 && count == 0
+          ? '正在扫描文件…'
+          : '正在上传 ${done + failed + cancelled}/$count${s.scanning > 0 ? '+' : ''}'
+                '${progress != null ? ' · ${(progress * 100).toStringAsFixed(0)}%' : ''}'
+                '${speed > 0 ? ' · ${formatSpeed(speed)}' : ''}';
+    } else if (failed > 0) {
+      icon = Icons.error_outline_rounded;
+      color = cs.error;
+      text = '上传结束：成功 $done 个，失败 $failed 个';
+    } else {
+      icon = Icons.check_circle_rounded;
+      color = const Color(0xFF22A06B);
+      text = cancelled > 0
+          ? '已上传 $done 个文件，取消 $cancelled 个'
+          : '已上传 $done 个文件';
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        border: Border(top: BorderSide(color: cs.outlineVariant)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: cs.onSurface),
+                ),
+              ),
+              _barButton('详情', _showTransfers),
+              if (active) _barButton('取消', s.cancelUploads),
+            ],
+          ),
+          if (active) ...[
+            const SizedBox(height: 5),
+            LinearProgressIndicator(
+              value: progress,
+              minHeight: 3,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _barButton(String label, VoidCallback onTap) => TextButton(
+    onPressed: onTap,
+    style: TextButton.styleFrom(
+      minimumSize: const Size(0, 24),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      visualDensity: VisualDensity.compact,
+      textStyle: const TextStyle(fontSize: 12),
+    ),
+    child: Text(label),
+  );
+
+  void _showTransfers() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AppDialogShell(
+        child: SizedBox(
+          width: 640,
+          height: 440,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 8, 0),
+                child: Row(
+                  children: [
+                    const Text(
+                      '传输详情',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      onPressed: () => Navigator.pop(c),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(child: TransferPanel(tab: widget.tab)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = sftp;
@@ -405,7 +599,7 @@ class _SftpPanelState extends State<SftpPanel> {
         return LayoutBuilder(builder: (context, box) {
           // 以面板自身宽度判断：够宽才用多列表格，否则用紧凑列表，避免溢出。
           final wide = box.maxWidth >= 560;
-          return Column(
+          final body = Column(
           children: [
             _toolbar(s, wide),
             if (s.loading) const LinearProgressIndicator(minHeight: 2),
@@ -435,6 +629,7 @@ class _SftpPanelState extends State<SftpPanel> {
                 ),
               ),
             ),
+            _transferBar(s),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               alignment: Alignment.centerLeft,
@@ -444,6 +639,24 @@ class _SftpPanelState extends State<SftpPanel> {
               ),
             ),
           ],
+          );
+          if (!_isDesktop) return body;
+          return DropTarget(
+            onDragEntered: (_) => setState(() => _dragging = true),
+            onDragExited: (_) => setState(() => _dragging = false),
+            onDragDone: (d) {
+              setState(() => _dragging = false);
+              final paths = [for (final f in d.files) f.path];
+              if (paths.isEmpty) return;
+              final dir = s.currentPath;
+              _run(() => s.uploadPaths(paths, dir));
+            },
+            child: Stack(
+              children: [
+                body,
+                if (_dragging) Positioned.fill(child: _dropOverlay(s)),
+              ],
+            ),
           );
         });
       },

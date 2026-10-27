@@ -320,21 +320,91 @@ class SftpService extends ChangeNotifier {
   }
 
   // ---------------- 传输 ----------------
+
+  /// 当前这一批上传（队列空闲后新加入的上传任务算作新的一批），供面板显示汇总进度。
+  final Set<String> _batchIds = {};
+  List<TransferTask> get uploadBatch =>
+      transfers.where((t) => _batchIds.contains(t.id)).toList();
+
+  /// 正在扫描本地文件夹（尚未全部加入队列）。
+  int scanning = 0;
+
+  /// 本批上传全部结束的时间，用于短暂显示“上传完成”。
+  DateTime? batchFinishedAt;
+
+  bool get uploadsActive =>
+      scanning > 0 ||
+      transfers.any(
+        (t) =>
+            t.kind == TransferKind.upload &&
+            (t.state == TransferState.queued ||
+                t.state == TransferState.running),
+      );
+
+  void _addToBatch(TransferTask t) {
+    if (!uploadsActive) {
+      _batchIds.clear();
+      batchFinishedAt = null;
+    }
+    _batchIds.add(t.id);
+  }
+
+  Timer? _refreshTimer;
+
+  /// 远程路径就是当前目录或其直接子项时刷新列表，并合并短时间内的多次刷新。
+  void _refreshIfVisible(String remotePath) {
+    if (remotePath != currentPath && remoteParent(remotePath) != currentPath) {
+      return;
+    }
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer(const Duration(milliseconds: 400), () {
+      if (!loading) refresh();
+    });
+  }
+
   Future<void> uploadPaths(List<String> localPaths, String remoteDir) async {
-    for (final lp in localPaths) {
-      final type = FileSystemEntity.typeSync(lp);
-      if (type == FileSystemEntityType.directory) {
-        await _queueUploadDir(Directory(lp), remoteDir);
-      } else if (type == FileSystemEntityType.file) {
-        _enqueue(TransferTask(
-          kind: TransferKind.upload,
-          localPath: lp,
-          remotePath: joinRemote(remoteDir, p.basename(lp)),
-          total: File(lp).lengthSync(),
-        ));
+    if (!uploadsActive) {
+      _batchIds.clear();
+      batchFinishedAt = null;
+    }
+    scanning++;
+    notifyListeners();
+    try {
+      for (final lp in localPaths) {
+        final type = FileSystemEntity.typeSync(lp);
+        if (type == FileSystemEntityType.directory) {
+          await _queueUploadDir(Directory(lp), remoteDir);
+        } else if (type == FileSystemEntityType.file) {
+          final t = TransferTask(
+            kind: TransferKind.upload,
+            localPath: lp,
+            remotePath: joinRemote(remoteDir, p.basename(lp)),
+            total: File(lp).lengthSync(),
+          );
+          _addToBatch(t);
+          _enqueue(t);
+        }
+        _pump();
+      }
+    } finally {
+      scanning--;
+      _checkBatchFinished();
+      notifyListeners();
+    }
+  }
+
+  void cancelUploads() {
+    for (final t in uploadBatch) {
+      if (t.state == TransferState.queued || t.state == TransferState.running) {
+        cancel(t);
       }
     }
-    _pump();
+  }
+
+  void _checkBatchFinished() {
+    if (_batchIds.isEmpty || uploadsActive || batchFinishedAt != null) return;
+    batchFinishedAt = DateTime.now();
+    _refreshIfVisible(currentPath);
   }
 
   Future<void> _queueUploadDir(Directory dir, String remoteDir) async {
@@ -343,16 +413,20 @@ class SftpService extends ChangeNotifier {
     try {
       await s.mkdir(base);
     } catch (_) {}
+    _refreshIfVisible(base);
     await for (final ent in dir.list(followLinks: false)) {
       if (ent is Directory) {
         await _queueUploadDir(ent, base);
       } else if (ent is File) {
-        _enqueue(TransferTask(
+        final t = TransferTask(
           kind: TransferKind.upload,
           localPath: ent.path,
           remotePath: joinRemote(base, p.basename(ent.path)),
           total: ent.lengthSync(),
-        ));
+        );
+        _addToBatch(t);
+        _enqueue(t);
+        _pump();
       }
     }
   }
@@ -502,18 +576,18 @@ class SftpService extends ChangeNotifier {
       t.state = TransferState.failed;
       t.error = e.toString();
     }
-    notifyListeners();
-    if (t.kind == TransferKind.upload &&
-        t.state == TransferState.done &&
-        remoteParent(t.remotePath) == currentPath) {
-      refresh();
+    if (t.kind == TransferKind.upload) {
+      if (t.state == TransferState.done) _refreshIfVisible(t.remotePath);
+      _checkBatchFinished();
     }
+    notifyListeners();
   }
 
   void cancel(TransferTask t) {
     t._cancel = true;
     t._writer?.abort();
     if (t.state == TransferState.queued) t.state = TransferState.cancelled;
+    _checkBatchFinished();
     notifyListeners();
   }
 
