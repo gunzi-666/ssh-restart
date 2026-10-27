@@ -11,15 +11,26 @@ import '../services/app_store.dart';
 import '../state/ssh_tab.dart';
 import 'terminal_themes.dart';
 
-TerminalStyle terminalStyleFor(AppStore store) {
-  final family = store.settings.terminalFontFamily.trim();
+TerminalStyle terminalStyleFor(AppStore store) =>
+    _terminalStyle(store.settings.terminalFontFamily, store.settings.terminalFontSize);
+
+// TerminalStyle 未实现 ==，每次传入新实例都会让 xterm 重新测量字符并清空字形缓存，
+// 因此相同字体设置必须复用同一个实例。
+(String, double)? _styleKey;
+TerminalStyle? _styleCache;
+
+TerminalStyle _terminalStyle(String fontFamily, double fontSize) {
+  final key = (fontFamily, fontSize);
+  if (_styleKey == key) return _styleCache!;
+  final family = fontFamily.trim();
   final defaultFamily = Platform.isWindows
       ? 'Consolas'
       : Platform.isIOS || Platform.isMacOS
           ? 'Menlo'
           : 'monospace';
-  return TerminalStyle(
-    fontSize: store.settings.terminalFontSize,
+  _styleKey = key;
+  return _styleCache = TerminalStyle(
+    fontSize: fontSize,
     fontFamily: family.isEmpty ? defaultFamily : family,
     fontFamilyFallback: const [
       'Consolas',
@@ -53,10 +64,19 @@ class _TerminalPaneState extends State<TerminalPane> {
 
   SshTab get tab => widget.tab;
 
+  final _viewKey = GlobalKey<TerminalViewState>();
+  late final _ime = _TerminalIme(
+    onCommit: (text) => tab.terminal.textInput(text),
+    caret: _caret,
+  );
+  static final _desktop = !(Platform.isAndroid || Platform.isIOS);
+
   @override
   void initState() {
     super.initState();
     tab.terminalController.addListener(_onSelection);
+    _focus.addListener(_onFocus);
+    if (_focus.hasFocus) _onFocus();
   }
 
   @override
@@ -65,14 +85,38 @@ class _TerminalPaneState extends State<TerminalPane> {
     if (old.tab != widget.tab) {
       old.tab.terminalController.removeListener(_onSelection);
       widget.tab.terminalController.addListener(_onSelection);
+      old.tab.terminalFocus.removeListener(_onFocus);
+      _focus.addListener(_onFocus);
     }
   }
 
   @override
   void dispose() {
     tab.terminalController.removeListener(_onSelection);
+    _focus.removeListener(_onFocus);
+    _ime.close();
     _copyTimer?.cancel();
     super.dispose();
+  }
+
+  void _onFocus() {
+    if (!_desktop) return;
+    if (!_focus.hasFocus) {
+      _ime.close();
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _focus.hasFocus) _ime.open(View.of(context).viewId);
+    });
+  }
+
+  /// 终端光标在屏幕上的位置，用于定位输入法候选框。
+  (Size, Matrix4, Rect)? _caret() {
+    final view = _viewKey.currentState;
+    if (view == null || !view.mounted) return null;
+    final box = view.renderTerminal;
+    if (!box.attached || !box.hasSize) return null;
+    return (box.size, box.getTransformTo(null), view.cursorRect);
   }
 
   String? get _selectedText {
@@ -172,6 +216,11 @@ class _TerminalPaneState extends State<TerminalPane> {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    if (_desktop) {
+      // 输入法组字期间（及上屏瞬间的回车）按键归输入法，不能再作为硬件按键发往终端。
+      if (_ime.busy) return KeyEventResult.handled;
+      if (e is KeyDownEvent) _ime.updateCaret();
+    }
     if (e is! KeyDownEvent) return KeyEventResult.ignored;
     final hk = HardwareKeyboard.instance;
     if (hk.isControlPressed && hk.isShiftPressed) {
@@ -205,8 +254,15 @@ class _TerminalPaneState extends State<TerminalPane> {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<AppStore>();
-    final theme = terminalThemeByName(store.settings.terminalTheme);
+    final (themeName, fontFamily, fontSize, cursorStyle) = context.select(
+      (AppStore s) => (
+        s.settings.terminalTheme,
+        s.settings.terminalFontFamily,
+        s.settings.terminalFontSize,
+        s.settings.cursorStyle,
+      ),
+    );
+    final theme = terminalThemeByName(themeName);
     final mobile = Platform.isAndroid || Platform.isIOS;
     final view = Listener(
       onPointerSignal: (e) {
@@ -217,8 +273,11 @@ class _TerminalPaneState extends State<TerminalPane> {
       },
       // xterm 在存在选区时首次点击只清除选区而不获取焦点，这里保证任何点击都聚焦终端。
       onPointerDown: (e) {
-        if (e.buttons == kPrimaryButton && !_focus.hasFocus) {
+        if (e.buttons != kPrimaryButton) return;
+        if (!_focus.hasFocus) {
           _focus.requestFocus();
+        } else if (_desktop) {
+          _ime.open(View.of(context).viewId);
         }
       },
       child: Container(
@@ -226,22 +285,23 @@ class _TerminalPaneState extends State<TerminalPane> {
         decoration: BoxDecoration(color: theme.background),
         child: TerminalView(
           tab.terminal,
+          key: _viewKey,
           controller: tab.terminalController,
           focusNode: _focus,
           autofocus: true,
           theme: theme,
-          textStyle: terminalStyleFor(store),
+          textStyle: _terminalStyle(fontFamily, fontSize),
           padding: const EdgeInsets.all(4),
           deleteDetection: mobile,
-          cursorType: switch (store.settings.cursorStyle) {
+          cursorType: switch (cursorStyle) {
             'underline' => TerminalCursorType.underline,
             'bar' => TerminalCursorType.verticalBar,
             _ => TerminalCursorType.block,
           },
           keyboardAppearance: Theme.of(context).brightness,
-          // 桌面端直接用硬件键盘事件取字符，避免 xterm 默认的 IME 文本连接
-          // 因拿不到 keyboard token 而需要先点击才能输入的问题。
-          hardwareKeyboardOnly: !mobile,
+          // 桌面端用硬件按键取字符；xterm 自带的输入法连接在 Windows 上收不到文字，
+          // 中文输入法的组字与上屏由 _TerminalIme 单独接收。
+          hardwareKeyboardOnly: _desktop,
           onKeyEvent: _onKey,
           onSecondaryTapDown: (d, _) => _contextMenu(d.globalPosition),
         ),
@@ -254,6 +314,111 @@ class _TerminalPaneState extends State<TerminalPane> {
         MobileKeyBar(tab: tab, onPaste: _paste),
       ],
     );
+  }
+}
+
+/// 桌面端终端的输入法客户端：只接收输入法组字与上屏的文本，普通按键仍走硬件键盘。
+class _TerminalIme with TextInputClient {
+  _TerminalIme({required this.onCommit, required this.caret});
+
+  final void Function(String text) onCommit;
+  final (Size, Matrix4, Rect)? Function() caret;
+
+  TextInputConnection? _conn;
+  TextEditingValue _value = TextEditingValue.empty;
+  DateTime _committedAt = DateTime(0);
+
+  bool get composing => _value.composing.isValid && !_value.composing.isCollapsed;
+
+  /// 正在组字，或刚上屏（确认上屏的回车可能晚于上屏文本到达）。
+  bool get busy =>
+      composing ||
+      DateTime.now().difference(_committedAt) < const Duration(milliseconds: 120);
+
+  /// [viewId] 必须提供：Windows 引擎会拒绝不带 viewId 的输入连接，导致收不到输入法文本。
+  void open(int viewId) {
+    if (_conn == null || !_conn!.attached) {
+      _value = TextEditingValue.empty;
+      _sent = 0;
+      _conn = TextInput.attach(
+        this,
+        TextInputConfiguration(
+          viewId: viewId,
+          inputType: TextInputType.text,
+          inputAction: TextInputAction.none,
+          autocorrect: false,
+          enableSuggestions: false,
+          enableIMEPersonalizedLearning: false,
+        ),
+      )..setEditingState(_value);
+    }
+    _conn!.show();
+    updateCaret();
+  }
+
+  void close() {
+    if (_conn?.attached == true) _conn!.close();
+    _conn = null;
+    _value = TextEditingValue.empty;
+    _sent = 0;
+  }
+
+  void updateCaret() {
+    final c = _conn;
+    if (c == null || !c.attached) return;
+    final info = caret();
+    if (info == null) return;
+    final (size, transform, rect) = info;
+    c
+      ..setEditableSizeAndTransform(size, transform)
+      ..setCaretRect(rect);
+  }
+
+  @override
+  TextEditingValue? get currentTextEditingValue => _value;
+
+  @override
+  AutofillScope? get currentAutofillScope => null;
+
+  /// 已发往终端的确认文本长度（组字区之前的部分）。
+  int _sent = 0;
+
+  @override
+  void updateEditingValue(TextEditingValue value) {
+    _value = value;
+    final c = value.composing;
+    final active = c.isValid && !c.isCollapsed;
+    final confirmed = active ? value.text.substring(0, c.start) : value.text;
+    if (confirmed.length > _sent) {
+      _committedAt = DateTime.now();
+      onCommit(confirmed.substring(_sent));
+    }
+    _sent = confirmed.length;
+    if (active) {
+      updateCaret();
+    } else if (value.text.isNotEmpty) {
+      _value = TextEditingValue.empty;
+      _sent = 0;
+      _conn?.setEditingState(_value);
+    }
+  }
+
+  @override
+  void performAction(TextInputAction action) {}
+
+  @override
+  void performPrivateCommand(String action, Map<String, dynamic> data) {}
+
+  @override
+  void updateFloatingCursor(RawFloatingCursorPoint point) {}
+
+  @override
+  void showAutocorrectionPromptRect(int start, int end) {}
+
+  @override
+  void connectionClosed() {
+    _conn = null;
+    _value = TextEditingValue.empty;
   }
 }
 

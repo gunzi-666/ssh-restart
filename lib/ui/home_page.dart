@@ -30,6 +30,19 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   bool _mobileShowSessions = true;
 
+  /// 桌面端是否停留在首页；已打开的标签在后台保持连接。
+  bool _showHome = false;
+
+  void _activateTab(int i) {
+    tabs.activate(i);
+    if (!_showHome) return;
+    setState(() => _showHome = false);
+    final t = tabs.active;
+    if (t is SshTab) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => t.focusTerminal());
+    }
+  }
+
   bool get _desktopPlatform =>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
@@ -43,7 +56,10 @@ class _HomePageState extends State<HomePage> {
   Future<void> _connect(SessionConfig s) async {
     if (s.type != SessionType.ssh) {
       tabs.open(s);
-      setState(() => _mobileShowSessions = false);
+      setState(() {
+        _mobileShowSessions = false;
+        _showHome = false;
+      });
       return;
     }
     final tab = tabs.connectInBackground(s);
@@ -51,7 +67,10 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     if (ok && tab.status == TabStatus.connected) {
       tabs.attach(tab);
-      setState(() => _mobileShowSessions = false);
+      setState(() {
+        _mobileShowSessions = false;
+        _showHome = false;
+      });
     } else {
       await tab.close();
     }
@@ -62,7 +81,10 @@ class _HomePageState extends State<HomePage> {
     for (final s in list) {
       tabs.open(s);
     }
-    setState(() => _mobileShowSessions = false);
+    setState(() {
+      _mobileShowSessions = false;
+      _showHome = false;
+    });
   }
 
   Future<void> _closeTab(AppTab t) async {
@@ -114,6 +136,7 @@ class _HomePageState extends State<HomePage> {
         }
       case 'dup':
         tabs.duplicate(t);
+        setState(() => _showHome = false);
       case 'close':
         _closeTab(t);
       case 'others':
@@ -173,9 +196,10 @@ class _HomePageState extends State<HomePage> {
                   ),
                 )),
                 _TopBarButton(
-                  icon: Icons.folder_open_outlined,
-                  tooltip: '会话管理器',
-                  onPressed: () => showSessionManagerDialog(context, _connect),
+                  icon: Icons.home_outlined,
+                  tooltip: '返回首页（已连接的终端保持连接）',
+                  active: _showHome || tc.tabs.isEmpty,
+                  onPressed: () => setState(() => _showHome = true),
                 ),
                 const SizedBox(width: 6),
                 // 标签列表按内容收缩，其后直到「+」按钮的空白处都可拖动窗口。
@@ -206,8 +230,8 @@ class _HomePageState extends State<HomePage> {
                                   index: i,
                                   child: _DesktopTabChip(
                                     tab: t,
-                                    active: i == tc.activeIndex,
-                                    onTap: () => tc.activate(i),
+                                    active: !_showHome && i == tc.activeIndex,
+                                    onTap: () => _activateTab(i),
                                     onClose: () => _closeTab(t),
                                     onMenu: (pos) => _tabMenu(t, pos),
                                   ),
@@ -258,12 +282,24 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Expanded(
-            child: tc.tabs.isEmpty
-                ? _welcome()
-                : IndexedStack(
-                    index: tc.activeIndex.clamp(0, tc.tabs.length - 1),
-                    children: [for (final t in tc.tabs) _tabView(t)],
+            child: IndexedStack(
+              index: _showHome || tc.tabs.isEmpty
+                  ? 0
+                  : tc.activeIndex.clamp(0, tc.tabs.length - 1) + 1,
+              children: [
+                ExcludeFocus(
+                  key: const ValueKey('home'),
+                  excluding: !_showHome && tc.tabs.isNotEmpty,
+                  child: _welcome(),
+                ),
+                for (final t in tc.tabs)
+                  ExcludeFocus(
+                    key: ValueKey(t.id),
+                    excluding: _showHome,
+                    child: _tabView(t),
                   ),
+              ],
+            ),
           ),
         ],
       ),
@@ -562,23 +598,30 @@ class _TopBarButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.active = false,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onPressed;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Tooltip(
       message: tooltip,
-      child: InkWell(
+      child: Material(
+        color: active ? cs.primary.withValues(alpha: 0.12) : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Icon(icon, size: 19, color: cs.onSurfaceVariant),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(icon,
+                size: 19, color: active ? cs.primary : cs.onSurfaceVariant),
+          ),
         ),
       ),
     );
