@@ -182,7 +182,7 @@ class SshTab extends AppTab {
       final Stream<String> err = isGbk
           ? gbk.decoder.bind(shell.stderr)
           : const Utf8Decoder(allowMalformed: true).bind(shell.stderr);
-      _outSub = out.listen(terminal.write);
+      _outSub = out.listen(_onStdout);
       _errSub = err.listen(terminal.write);
       shell.done.then((_) => _onDisconnected(seq, null));
       conn.client.done.then((_) => _onDisconnected(seq, null),
@@ -207,18 +207,18 @@ class SshTab extends AppTab {
       // 可选：为常见命令启用彩色输出（很多服务器 root 的 shell 默认未开启）。
       // 同时为 bash 设置彩色提示符（绿色 用户@主机、蓝色 路径），
       // 让真实连接的观感与设置里的预览一致。
-      // 行首空格可避免写入带 ignorespace 的历史；clear 收起这条噪声。
+      // 行首空格可避免写入带 ignorespace 的历史；命令回显由 _sendHidden 在本地隐藏，
+      // 不用 clear，以免清掉登录时的欢迎信息。
       if (store.settings.terminalColorHelper) {
         Future.delayed(const Duration(milliseconds: 500), () {
-          sendText(
+          _sendHidden(
             " export CLICOLOR=1;"
             " alias ls='ls --color=auto'; alias ll='ls -alF --color=auto';"
             " alias la='ls -A --color=auto'; alias grep='grep --color=auto';"
             " alias egrep='egrep --color=auto'; alias fgrep='fgrep --color=auto';"
             " if [ -n \"\$BASH_VERSION\" ]; then"
             " PS1='\\[\\e[1;32m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\\$ ';"
-            " fi; clear\r",
-            recordHistory: false,
+            " fi;",
           );
         });
       }
@@ -249,7 +249,52 @@ class SshTab extends AppTab {
     setStatus(TabStatus.disconnected, e?.toString());
   }
 
+  // 隐藏注入命令的回显：发送后暂存输出，直到看到命令末尾打印的标记。
+  StringBuffer? _hold;
+  String _holdEcho = '';
+  Timer? _holdTimer;
+
+  String get _holdMarker => '<<SSHR$_marker>>';
+
+  void _onStdout(String data) {
+    final hold = _hold;
+    if (hold == null) {
+      terminal.write(data);
+      return;
+    }
+    hold.write(data);
+    final all = hold.toString();
+    final end = all.indexOf(_holdMarker);
+    if (end < 0) return;
+    // 回显之前的内容（欢迎信息、旧提示符）照常显示，再擦掉旧提示符所在行。
+    final start = all.indexOf(_holdEcho);
+    _endHold();
+    if (start >= 0 && start < end) terminal.write(all.substring(0, start));
+    terminal.write('\r\x1b[2K');
+    terminal.write(all.substring(end + _holdMarker.length));
+  }
+
+  void _endHold() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _hold = null;
+  }
+
+  /// 发送一条不在终端里显示回显的命令；标记以两段拼接输出，回显中不会出现完整标记。
+  void _sendHidden(String command) {
+    if (status != TabStatus.connected || _shell == null) return;
+    final buf = _hold = StringBuffer();
+    _holdEcho = command.substring(0, command.length.clamp(0, 16));
+    _holdTimer = Timer(const Duration(seconds: 3), () {
+      if (_hold != buf) return;
+      _endHold();
+      terminal.write(buf.toString());
+    });
+    _shell!.write(_encode("$command printf '%s%s' '<<SSHR' '$_marker>>'\r"));
+  }
+
   Future<void> _teardown() async {
+    _endHold();
     await _outSub?.cancel();
     await _errSub?.cancel();
     _outSub = null;
