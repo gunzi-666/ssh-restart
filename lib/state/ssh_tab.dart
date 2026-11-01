@@ -17,16 +17,12 @@ import '../services/ssh/ssh_connector.dart';
 import 'app_tab.dart';
 import 'connect_progress.dart';
 import 'editor_file.dart';
+import 'reflow_terminal.dart';
 
 /// 一个 SSH 标签页：终端、状态监控、SFTP 与端口转发共用同一条 SSH 连接。
 class SshTab extends AppTab {
   SshTab(super.config, this.store) {
-    // xterm 的 reflow 在宽度变化时会替换整个缓冲区且不校正光标，遇到中文/彩色
-    // 输出时会错乱（最大化再还原后内容丢失、露出旧输出），故关闭。
-    terminal = Terminal(
-      maxLines: store.settings.scrollback,
-      reflowEnabled: false,
-    );
+    terminal = ReflowTerminal(maxLines: store.settings.scrollback);
     terminal.onOutput = _onTerminalInput;
     terminal.onResize = (w, h, pw, ph) {
       _cols = w;

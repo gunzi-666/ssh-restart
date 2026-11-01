@@ -65,6 +65,15 @@ class _TerminalPaneState extends State<TerminalPane> {
   SshTab get tab => widget.tab;
 
   final _viewKey = GlobalKey<TerminalViewState>();
+  final _scroll = ScrollController();
+
+  // 拖选超出上下边缘时自动滚动。xterm 以拖动起点的屏幕坐标计算选区，滚动后起点会漂移，
+  // 因此一旦发生自动滚动，改用按下时记录的缓冲区锚点作为起点自行维护选区。
+  CellAnchor? _dragBase;
+  Offset? _dragGlobal;
+  bool _dragScrolled = false;
+  bool _applyingSelection = false;
+  Timer? _autoScroll;
   late final _ime = _TerminalIme(
     onCommit: (text) => tab.terminal.textInput(text),
     caret: _caret,
@@ -96,7 +105,98 @@ class _TerminalPaneState extends State<TerminalPane> {
     _focus.removeListener(_onFocus);
     _ime.close();
     _copyTimer?.cancel();
+    _endDrag();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  /// 终端渲染区域内的本地坐标与尺寸；未完成布局时为 null。
+  (Offset, Size)? _local(Offset global) {
+    final box = _viewKey.currentState?.renderTerminal;
+    if (box == null || !box.attached || !box.hasSize) return null;
+    return (box.globalToLocal(global), box.size);
+  }
+
+  void _startDrag(Offset global) {
+    _endDrag();
+    final anchor = _anchorAt(global);
+    if (anchor == null) return;
+    _dragBase = anchor;
+    _dragGlobal = global;
+  }
+
+  void _endDrag() {
+    _autoScroll?.cancel();
+    _autoScroll = null;
+    _dragBase?.dispose();
+    _dragBase = null;
+    _dragGlobal = null;
+    _dragScrolled = false;
+  }
+
+  CellAnchor? _anchorAt(Offset global) {
+    final l = _local(global);
+    if (l == null) return null;
+    final (local, s) = l;
+    final cell = _viewKey.currentState!.renderTerminal.getCellOffset(Offset(
+      local.dx.clamp(0, s.width - 1),
+      local.dy.clamp(0, s.height - 1),
+    ));
+    final buf = tab.terminal.buffer;
+    return buf.createAnchor(
+      cell.x.clamp(0, tab.terminal.viewWidth),
+      cell.y.clamp(0, buf.lines.length - 1),
+    );
+  }
+
+  void _onDragMove(PointerMoveEvent e) {
+    if (_dragBase == null || e.buttons & kPrimaryButton == 0) return;
+    _dragGlobal = e.position;
+    final l = _local(e.position);
+    if (l == null) return;
+    final dy = l.$1.dy;
+    if (dy < 0 || dy > l.$2.height) {
+      _autoScroll ??=
+          Timer.periodic(const Duration(milliseconds: 16), (_) => _autoScrollTick());
+    } else {
+      _autoScroll?.cancel();
+      _autoScroll = null;
+    }
+    if (_dragScrolled) _extendSelection();
+  }
+
+  void _autoScrollTick() {
+    final global = _dragGlobal;
+    final l = global == null ? null : _local(global);
+    if (l == null || !_scroll.hasClients) return;
+    final dy = l.$1.dy;
+    final h = l.$2.height;
+    final over = dy < 0 ? dy : (dy > h ? dy - h : 0.0);
+    if (over == 0) return;
+    final p = _scroll.position;
+    final step = over.sign * (over.abs() * 0.5).clamp(4.0, 60.0);
+    final target = (p.pixels + step).clamp(p.minScrollExtent, p.maxScrollExtent);
+    if (target == p.pixels) return;
+    _scroll.jumpTo(target);
+    _dragScrolled = true;
+    _extendSelection();
+  }
+
+  void _extendSelection() {
+    final base = _dragBase;
+    final global = _dragGlobal;
+    if (base == null || !base.attached || global == null) return;
+    final extent = _anchorAt(global);
+    if (extent == null) return;
+    _applyingSelection = true;
+    try {
+      tab.terminalController.setSelection(
+        tab.terminal.buffer.createAnchorFromOffset(base.offset),
+        extent,
+      );
+    } finally {
+      _applyingSelection = false;
+    }
   }
 
   void _onFocus() {
@@ -127,6 +227,7 @@ class _TerminalPaneState extends State<TerminalPane> {
   }
 
   void _onSelection() {
+    if (_dragScrolled && !_applyingSelection) _extendSelection();
     if (!context.read<AppStore>().settings.copyOnSelect) return;
     _copyTimer?.cancel();
     _copyTimer = Timer(const Duration(milliseconds: 350), () {
@@ -272,8 +373,12 @@ class _TerminalPaneState extends State<TerminalPane> {
         }
       },
       // xterm 在存在选区时首次点击只清除选区而不获取焦点，这里保证任何点击都聚焦终端。
+      onPointerMove: _onDragMove,
+      onPointerUp: (_) => _endDrag(),
+      onPointerCancel: (_) => _endDrag(),
       onPointerDown: (e) {
         if (e.buttons != kPrimaryButton) return;
+        _startDrag(e.position);
         if (!_focus.hasFocus) {
           _focus.requestFocus();
         } else if (_desktop) {
@@ -286,6 +391,7 @@ class _TerminalPaneState extends State<TerminalPane> {
         child: TerminalView(
           tab.terminal,
           key: _viewKey,
+          scrollController: _scroll,
           controller: tab.terminalController,
           focusNode: _focus,
           autofocus: true,
