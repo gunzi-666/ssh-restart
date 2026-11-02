@@ -360,17 +360,15 @@ class Updater {
     // .../X.app/Contents/MacOS/ssh_restart
     final appPath = p.dirname(p.dirname(p.dirname(Platform.resolvedExecutable)));
     if (!appPath.endsWith('.app')) throw '无法确定程序位置：$appPath';
-    try {
-      final probe = File(p.join(p.dirname(appPath), '.ssh_restart_write_test'));
-      await probe.writeAsString('');
-      await probe.delete();
-    } catch (_) {
-      throw '程序所在目录没有写入权限（${p.dirname(appPath)}），请手动下载安装包覆盖';
-    }
 
     await extracted.create(recursive: true);
-    final r = await Process.run('ditto', ['-x', '-k', zip.path, extracted.path]);
-    if (r.exitCode != 0) throw '解压失败：${r.stderr}';
+    final unzip = await Process.run('ditto', [
+      '-x',
+      '-k',
+      zip.path,
+      extracted.path,
+    ]);
+    if (unzip.exitCode != 0) throw '解压失败：${unzip.stderr}';
     final newApp = extracted
         .listSync()
         .whereType<Directory>()
@@ -378,25 +376,84 @@ class Updater {
         .firstOrNull;
     if (newApp == null) throw '安装包内容不正确：没有找到 .app';
 
-    String q(String s) => "'${s.replaceAll("'", "'\\''")}'";
+    final writable = await _canWrite(p.dirname(appPath));
     final script = File(p.join(work.path, 'install.sh'));
-    await script.writeAsString('''
+    final log = p.join(work.path, 'install.log');
+    await script.writeAsString(macInstallScript(
+      pid: pid,
+      appPath: appPath,
+      newAppPath: newApp.path,
+    ));
+    if (writable) {
+      await Process.start('/bin/sh', [
+        script.path,
+      ], mode: ProcessStartMode.detached);
+      return;
+    }
+
+    // /Applications 等受保护目录：先弹出系统管理员密码框，授权后在后台等本程序退出再替换。
+    final auth = await Process.run('osascript', [
+      '-e',
+      appleScriptPrivilegedLaunch(script.path, log),
+    ]);
+    if (auth.exitCode == 0) return;
+    final err = '${auth.stderr}'.toLowerCase();
+    if (err.contains('user canceled') || err.contains('-128')) {
+      throw '已取消管理员授权，无法写入 ${p.dirname(appPath)}。可把应用放到用户目录后再更新，或手动下载覆盖';
+    }
+    throw '无法获取管理员权限（${p.dirname(appPath)}）：${auth.stderr}';
+  }
+
+  static Future<bool> _canWrite(String dir) async {
+    final probe = File(p.join(dir, '.ssh_restart_write_test'));
+    try {
+      await probe.writeAsString('');
+      await probe.delete();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 生成 macOS 覆盖脚本：等旧进程退出后替换 .app。以 root 运行时用当前登录用户打开新版本。
+  @visibleForTesting
+  static String macInstallScript({
+    required int pid,
+    required String appPath,
+    required String newAppPath,
+  }) {
+    String q(String s) => "'${s.replaceAll("'", "'\\''")}'";
+    return '''
 #!/bin/sh
 while kill -0 $pid 2>/dev/null; do sleep 0.5; done
+sleep 0.3
 bak=${q('$appPath.old')}
 rm -rf "\$bak"
 if mv ${q(appPath)} "\$bak"; then
-  if mv ${q(newApp.path)} ${q(appPath)}; then
+  if mv ${q(newAppPath)} ${q(appPath)}; then
     rm -rf "\$bak"
-    xattr -dr com.apple.quarantine ${q(appPath)} 2>/dev/null
+    xattr -dr com.apple.quarantine ${q(appPath)} 2>/dev/null || true
   else
     mv "\$bak" ${q(appPath)}
+    exit 1
   fi
+else
+  exit 1
 fi
-open ${q(appPath)}
-''');
-    await Process.start('/bin/sh', [
-      script.path,
-    ], mode: ProcessStartMode.detached);
+if [ "\$(id -u)" -eq 0 ]; then
+  sudo -u "\$(stat -f '%Su' /dev/console)" open ${q(appPath)}
+else
+  open ${q(appPath)}
+fi
+''';
+  }
+
+  /// 用 AppleScript 以管理员身份在后台启动覆盖脚本。路径通过 quoted form 转义。
+  @visibleForTesting
+  static String appleScriptPrivilegedLaunch(String script, String log) {
+    String as(String s) => s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    return 'do shell script "/bin/sh " & quoted form of "${as(script)}" '
+        '& " >" & quoted form of "${as(log)}" & " 2>&1 &" '
+        'with administrator privileges';
   }
 }

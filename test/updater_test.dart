@@ -36,4 +36,26 @@ void main() {
     expect(r.assets.first.sha256, 'abcdef');
     expect(r.assets.last.sha256, isNull);
   });
+
+  test('macOS 覆盖脚本会等待旧进程并在 root 下用登录用户打开', () {
+    final sh = Updater.macInstallScript(
+      pid: 4242,
+      appPath: "/Applications/SSH Restart.app",
+      newAppPath: "/tmp/new/SSH Restart.app",
+    );
+    expect(sh, contains('kill -0 4242'));
+    expect(sh, contains("'/Applications/SSH Restart.app'"));
+    expect(sh, contains("'/tmp/new/SSH Restart.app'"));
+    expect(sh, contains(r'''sudo -u "$(stat -f '%Su' /dev/console)" open'''));
+  });
+
+  test('macOS 提权 AppleScript 使用 quoted form 包裹路径', () {
+    final e = Updater.appleScriptPrivilegedLaunch(
+      r'/tmp/ssh"restart/install.sh',
+      r'/tmp/ssh"restart/install.log',
+    );
+    expect(e, contains('with administrator privileges'));
+    expect(e, contains(r'quoted form of "/tmp/ssh\"restart/install.sh"'));
+    expect(e, contains(r'quoted form of "/tmp/ssh\"restart/install.log"'));
+  });
 }
