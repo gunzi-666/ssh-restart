@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../models/session_config.dart';
 import '../services/app_store.dart';
+import '../services/connection_text.dart';
 import 'session_picker.dart';
 import 'widgets/common.dart';
 
@@ -15,10 +16,16 @@ Future<SessionConfig?> showSessionEditor(BuildContext context, SessionConfig s,
     {bool isNew = false}) {
   final page = SessionEditor(config: s, isNew: isNew);
   if (isWide(context)) {
+    final screen = MediaQuery.sizeOf(context);
+    final width = isNew ? 940.0 : 640.0;
     return showDialog<SessionConfig>(
       context: context,
       builder: (_) => AppDialogShell(
-        child: SizedBox(width: 620, height: 640, child: page),
+        child: SizedBox(
+          width: width.clamp(360.0, screen.width - 48),
+          height: 760.0.clamp(360.0, screen.height - 48),
+          child: page,
+        ),
       ),
     );
   }
@@ -51,7 +58,11 @@ class _SessionEditorState extends State<SessionEditor> {
   late final _pPort = TextEditingController(text: '${s.proxy.port}');
   late final _pUser = TextEditingController(text: s.proxy.username);
   late final _pPass = TextEditingController(text: s.proxy.password);
+  final _quick = TextEditingController();
   bool _showPassword = false;
+
+  /// 宽弹窗中快速填写放在右侧，否则放在常规页顶部。
+  bool _quickAside = false;
 
   bool get isVnc => s.type == SessionType.vnc;
 
@@ -84,6 +95,45 @@ class _SessionEditorState extends State<SessionEditor> {
     setState(() => _key.text = utf8.decode(bytes, allowMalformed: true));
   }
 
+  Future<void> _pasteQuick() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    if (!mounted) return;
+    if (text.trim().isEmpty) {
+      showToast(context, '剪贴板里没有文本');
+      return;
+    }
+    _quick.text = text;
+    _applyQuick();
+  }
+
+  void _applyQuick() {
+    final list = parseConnectionText(_quick.text);
+    if (list.isEmpty) {
+      showToast(context, '没有识别到主机地址，请检查粘贴的内容');
+      return;
+    }
+    final c = list.first;
+    setState(() {
+      _host.text = c.host;
+      if (c.port != null) _port.text = '${c.port}';
+      if (c.username.isNotEmpty) _user.text = c.username;
+      if (c.password.isNotEmpty) _password.text = c.password;
+      if (c.name.isNotEmpty && _name.text.trim().isEmpty) _name.text = c.name;
+      if (!isVnc) {
+        s.authType = c.keyAuth && c.password.isEmpty
+            ? AuthType.key
+            : AuthType.password;
+      }
+    });
+    final tip = '已识别：${c.fields.join('、')}';
+    showToast(
+      context,
+      list.length > 1
+          ? '$tip。共识别到 ${list.length} 台，仅填入第一台，批量导入请用首页「新建连接 → 从文本批量导入」'
+          : tip,
+    );
+  }
+
   String get _title => widget.isNew
       ? (isVnc ? '新建 VNC 远程桌面' : '新建 SSH 连接')
       : '编辑会话';
@@ -97,12 +147,17 @@ class _SessionEditorState extends State<SessionEditor> {
     final tabs = isVnc
         ? const ['常规', 'SSH 隧道']
         : const ['常规', '高级', '代理', '跳板机', '隧道'];
-    final views = isVnc
-        ? [_general(), _jump()]
-        : [_general(), _advanced(), _proxy(), _jump(), _forwards()];
-    final body = Form(key: _form, child: TabBarView(children: views));
+    Widget body() => Form(
+          key: _form,
+          child: TabBarView(
+            children: isVnc
+                ? [_general(), _jump()]
+                : [_general(), _advanced(), _proxy(), _jump(), _forwards()],
+          ),
+        );
 
     if (!isWide(context)) {
+      _quickAside = false;
       return DefaultTabController(
         length: tabs.length,
         child: Scaffold(
@@ -121,7 +176,7 @@ class _SessionEditorState extends State<SessionEditor> {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: AppTabBar(tabs: tabs, scrollable: true),
               ),
-              Expanded(child: body),
+              Expanded(child: body()),
             ],
           ),
         ),
@@ -129,6 +184,16 @@ class _SessionEditorState extends State<SessionEditor> {
     }
 
     final cs = Theme.of(context).colorScheme;
+    Widget form() => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 18, 24, 4),
+              child: AppTabBar(tabs: tabs),
+            ),
+            Expanded(child: body()),
+          ],
+        );
     return DefaultTabController(
       length: tabs.length,
       child: Column(
@@ -138,11 +203,24 @@ class _SessionEditorState extends State<SessionEditor> {
             padding: const EdgeInsets.fromLTRB(24, 22, 20, 0),
             child: AppDialogHeader(title: _title, description: _description),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 18, 24, 4),
-            child: AppTabBar(tabs: tabs),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, c) {
+                _quickAside = widget.isNew && c.maxWidth >= 820;
+                if (!_quickAside) return form();
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: form()),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 18, 24, 20),
+                      child: SizedBox(width: 290, child: _quickPanel()),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
-          Expanded(child: body),
           Container(
             padding: const EdgeInsets.fromLTRB(24, 14, 24, 16),
             decoration: BoxDecoration(
@@ -219,70 +297,226 @@ class _SessionEditorState extends State<SessionEditor> {
     );
   }
 
-  Widget _general() {
-    return _pad([
-      _field('名称', _name, hint: '留空则显示主机地址'),
-      Row(
+  Widget _two(Widget a, Widget b, {int flexA = 1, int flexB = 1}) => Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            flex: 3,
-            child: _field('主机', _host,
-                hint: 'IP 或域名',
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? '请输入主机地址' : null),
-          ),
+          Expanded(flex: flexA, child: a),
           const SizedBox(width: 12),
-          Expanded(child: _field('端口', _port, digits: true)),
+          Expanded(flex: flexB, child: b),
+        ],
+      );
+
+  Widget _section(String title) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Text(title,
+              style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.4,
+                  color: cs.onSurfaceVariant)),
+          const SizedBox(width: 10),
+          Expanded(child: Divider(height: 1, color: cs.outlineVariant)),
         ],
       ),
-      if (!isVnc) ...[
-        _field('用户名', _user, hint: '例如：root'),
-        LabeledField(
-          label: '认证方式',
-          child: AppSegmented<AuthType>(
-            value: s.authType,
-            options: const [
-              (value: AuthType.password, label: '密码', icon: Icons.password),
-              (value: AuthType.key, label: '公钥', icon: Icons.vpn_key_outlined),
+    );
+  }
+
+  Widget _quickFill() {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bolt_rounded, size: 18, color: cs.primary),
+              const SizedBox(width: 6),
+              Text('快速填写',
+                  style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('粘贴连接信息，自动识别主机、端口、用户名和密码',
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
+              ),
             ],
-            onChanged: (v) => setState(() => s.authType = v),
           ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _quick,
+            minLines: 2,
+            maxLines: 4,
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              hintText: 'IP：1.2.3.4  端口：22  用户名：root  密码：******\n'
+                  '也支持 ssh root@1.2.3.4 -p 22、root@1.2.3.4:22',
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              AppButton(
+                label: '从剪贴板粘贴',
+                icon: Icons.content_paste_rounded,
+                onPressed: _pasteQuick,
+              ),
+              const SizedBox(width: 8),
+              AppButton(
+                label: '识别并填入',
+                icon: Icons.auto_fix_high_rounded,
+                primary: true,
+                onPressed: _applyQuick,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _quickPanel() {
+    final cs = Theme.of(context).colorScheme;
+    final muted = TextStyle(fontSize: 12.5, height: 1.5, color: cs.onSurfaceVariant);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bolt_rounded, size: 18, color: cs.primary),
+              const SizedBox(width: 6),
+              Text('快速填写',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('粘贴连接信息，自动填入左侧的主机、端口、用户名和密码。', style: muted),
+          const SizedBox(height: 12),
+          Expanded(
+            child: TextField(
+              controller: _quick,
+              expands: true,
+              maxLines: null,
+              textAlignVertical: TextAlignVertical.top,
+              style: const TextStyle(fontSize: 13, height: 1.5),
+              decoration: const InputDecoration(
+                hintText: 'IP：1.2.3.4\n端口：22\n用户名：root\n密码：******',
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          AppButton(
+            label: '从剪贴板粘贴并识别',
+            icon: Icons.content_paste_rounded,
+            onPressed: _pasteQuick,
+          ),
+          const SizedBox(height: 8),
+          AppButton(
+            label: '识别并填入',
+            icon: Icons.auto_fix_high_rounded,
+            primary: true,
+            onPressed: _applyQuick,
+          ),
+          const SizedBox(height: 12),
+          Text('也支持：\nssh root@1.2.3.4 -p 22\nroot@1.2.3.4:22\nHost / User / Password 等英文字段',
+              style: muted),
+        ],
+      ),
+    );
+  }
+
+  Widget _passwordField(String label) => _field(
+        label,
+        _password,
+        obscure: !_showPassword,
+        suffix: IconButton(
+          iconSize: 18,
+          icon: Icon(_showPassword
+              ? Icons.visibility_off_outlined
+              : Icons.visibility_outlined),
+          onPressed: () => setState(() => _showPassword = !_showPassword),
         ),
+      );
+
+  Widget _general() {
+    final keyAuth = !isVnc && s.authType == AuthType.key;
+    return _pad([
+      if (widget.isNew && !_quickAside) _quickFill(),
+      _section('服务器'),
+      _two(
+        _field('主机', _host,
+            hint: 'IP 或域名',
+            validator: (v) =>
+                (v == null || v.trim().isEmpty) ? '请输入主机地址' : null),
+        _field('端口', _port, digits: true),
+        flexA: 3,
+      ),
+      _two(
+        _field('名称', _name, hint: '留空则显示主机地址'),
+        _groupPicker(),
+      ),
+      _section(isVnc ? '认证' : '登录'),
+      if (isVnc)
+        _passwordField('VNC 密码')
+      else ...[
+        AppSegmented<AuthType>(
+          value: s.authType,
+          options: const [
+            (value: AuthType.password, label: '密码登录', icon: Icons.password),
+            (value: AuthType.key, label: '公钥登录', icon: Icons.vpn_key_outlined),
+          ],
+          onChanged: (v) => setState(() => s.authType = v),
+        ),
+        _two(
+          _field('用户名', _user, hint: '例如：root'),
+          keyAuth
+              ? _field('私钥密码（可选）', _passphrase, obscure: true)
+              : _passwordField('密码'),
+        ),
+        if (keyAuth) ...[
+          _field(
+            '私钥（OpenSSH / PEM 格式）',
+            _key,
+            maxLines: 6,
+            minLines: 4,
+            hint: '-----BEGIN OPENSSH PRIVATE KEY-----',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            suffix: IconButton(
+              tooltip: '从文件导入',
+              iconSize: 18,
+              icon: const Icon(Icons.file_open_outlined),
+              onPressed: _importKey,
+            ),
+          ),
+          _field('登录密码（可选，公钥失败时尝试）', _password, obscure: true),
+        ],
       ],
-      if (isVnc || s.authType == AuthType.password)
-        _field(
-          isVnc ? 'VNC 密码' : '密码',
-          _password,
-          obscure: !_showPassword,
-          suffix: IconButton(
-            iconSize: 18,
-            icon: Icon(_showPassword
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined),
-            onPressed: () => setState(() => _showPassword = !_showPassword),
-          ),
-        ),
-      if (!isVnc && s.authType == AuthType.key) ...[
-        _field(
-          '私钥（OpenSSH / PEM 格式）',
-          _key,
-          maxLines: 6,
-          minLines: 4,
-          hint: '-----BEGIN OPENSSH PRIVATE KEY-----',
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          suffix: IconButton(
-            tooltip: '从文件导入',
-            iconSize: 18,
-            icon: const Icon(Icons.file_open_outlined),
-            onPressed: _importKey,
-          ),
-        ),
-        _field('私钥密码（可选）', _passphrase, obscure: true),
-        _field('登录密码（可选，公钥失败时尝试）', _password, obscure: true),
-      ],
-      _groupPicker(),
-      _field('备注', _desc, hint: '可选'),
+      _section('其他'),
+      _field('备注', _desc, hint: '可选，会显示在服务器列表中', maxLines: 3, minLines: 1),
     ]);
   }
 

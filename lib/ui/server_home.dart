@@ -10,6 +10,7 @@ import '../models/session_config.dart';
 import '../services/app_store.dart';
 import 'command_panels.dart';
 import 'session_editor.dart';
+import 'text_import_dialog.dart';
 import 'widgets/common.dart';
 
 enum _Scope { all, favorites, recent, group, ungrouped, session }
@@ -1327,8 +1328,23 @@ class _ServerHomeViewState extends State<ServerHomeView> {
               _newGroup(parentId: _scope == _Scope.group ? _groupId : null),
           child: const Text('分组'),
         ),
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.playlist_add_rounded, size: 18),
+          onPressed: _importFromText,
+          child: const Text('从文本批量导入'),
+        ),
       ],
     );
+  }
+
+  Future<void> _importFromText() async {
+    final list = await showTextImportDialog(
+      context,
+      groupId: _scope == _Scope.group ? _groupId : null,
+    );
+    if (!mounted || list.isEmpty) return;
+    showToast(context, '已导入 ${list.length} 台服务器');
+    _reveal(list.last.id);
   }
 
   Widget _searchField() {
