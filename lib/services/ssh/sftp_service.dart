@@ -65,6 +65,20 @@ class RemoteEntry {
     if (f.length >= 4) return '${f[2]}/${f[3]}';
     return '${attrs.userID ?? ''}/${attrs.groupID ?? ''}';
   }
+
+  /// 符号链接目标，例如 `bin -> usr/bin` 中的 `usr/bin`。
+  String? get linkTarget {
+    if (!isLink) return null;
+    final i = longname.indexOf(' -> ');
+    if (i < 0) return null;
+    final t = longname.substring(i + 4).trim();
+    return t.isEmpty ? null : t;
+  }
+}
+
+String normalizeRemote(String path) {
+  if (path.isEmpty || path == '/') return '/';
+  return path.endsWith('/') ? path.substring(0, path.length - 1) : path;
 }
 
 enum TransferKind { upload, download }
@@ -115,6 +129,14 @@ class SftpService extends ChangeNotifier {
   bool showHidden = false;
   final List<String> backStack = [];
 
+  /// 已列出的目录内容，按绝对路径缓存，供树状展开复用。
+  final Map<String, List<RemoteEntry>> children = {};
+  /// 树状视图中已展开的目录。
+  final Set<String> expanded = {};
+  final Set<String> _listing = {};
+  /// 目录缓存、展开状态或隐藏文件开关变化时递增，供界面缓存树的展平结果。
+  int treeVersion = 0;
+
   final List<TransferTask> transfers = [];
   int maxConcurrent = 2;
   int _running = 0;
@@ -149,36 +171,107 @@ class SftpService extends ChangeNotifier {
     super.dispose();
   }
 
+  Future<List<RemoteEntry>> _fetch(String abs) async {
+    final s = await sftp;
+    final list = await s.listdir(abs);
+    final items = <RemoteEntry>[];
+    for (final n in list) {
+      if (n.filename == '.' || n.filename == '..') continue;
+      var attrs = n.attr;
+      if (attrs.isSymbolicLink) {
+        try {
+          final target = await s.stat(joinRemote(abs, n.filename));
+          if (target.isDirectory) attrs = target;
+        } catch (_) {}
+      }
+      items.add(RemoteEntry(
+          n.filename, joinRemote(abs, n.filename), attrs, n.longname));
+    }
+    items.sort((a, b) {
+      if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return items;
+  }
+
+  /// 列出 [path] 并写入缓存；[force] 为 true 时强制重新拉取。
+  Future<void> listDir(String path, {bool force = false}) async {
+    final abs = normalizeRemote(
+        path.startsWith('/') ? path : await (await sftp).absolute(path));
+    if (!force && children.containsKey(abs)) return;
+    _listing.add(abs);
+    notifyListeners();
+    try {
+      children[abs] = await _fetch(abs);
+      treeVersion++;
+      if (abs == currentPath) entries = children[abs]!;
+      error = null;
+    } catch (e) {
+      error = '打开目录失败：$e';
+    } finally {
+      _listing.remove(abs);
+      notifyListeners();
+    }
+  }
+
+  bool isListing(String path) => _listing.contains(normalizeRemote(path));
+
+  List<RemoteEntry> visibleChildren(String path) {
+    final list = children[normalizeRemote(path)] ?? const <RemoteEntry>[];
+    return showHidden
+        ? list
+        : list.where((e) => !e.name.startsWith('.')).toList();
+  }
+
+  Future<void> toggleExpand(String path) async {
+    final abs = normalizeRemote(path);
+    if (expanded.contains(abs)) {
+      expanded.remove(abs);
+      expanded.removeWhere((p) => p.startsWith('$abs/'));
+      treeVersion++;
+      notifyListeners();
+      return;
+    }
+    await listDir(abs);
+    if (children.containsKey(abs)) {
+      expanded.add(abs);
+      treeVersion++;
+      notifyListeners();
+    }
+  }
+
+  /// 展开到 [path] 的全部祖先目录，使树状视图能看到该路径。
+  Future<void> reveal(String path) async {
+    final abs = normalizeRemote(
+        path.startsWith('/') ? path : await (await sftp).absolute(path));
+    final chain = <String>[];
+    for (var p = abs; ; p = remoteParent(p)) {
+      chain.add(p);
+      if (p == '/') break;
+    }
+    for (final dir in chain.reversed) {
+      await listDir(dir);
+      if (dir != abs) expanded.add(dir);
+    }
+    treeVersion++;
+  }
+
   Future<void> cd(String path, {bool pushHistory = true}) async {
     loading = true;
     error = null;
     notifyListeners();
     try {
-      final s = await sftp;
-      final abs = path.startsWith('/') ? path : await s.absolute(path);
-      final list = await s.listdir(abs);
-      final items = <RemoteEntry>[];
-      for (final n in list) {
-        if (n.filename == '.' || n.filename == '..') continue;
-        var attrs = n.attr;
-        if (attrs.isSymbolicLink) {
-          try {
-            final target = await s.stat(joinRemote(abs, n.filename));
-            if (target.isDirectory) attrs = target;
-          } catch (_) {}
-        }
-        items.add(RemoteEntry(
-            n.filename, joinRemote(abs, n.filename), attrs, n.longname));
-      }
-      items.sort((a, b) {
-        if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
+      final abs = normalizeRemote(
+          path.startsWith('/') ? path : await (await sftp).absolute(path));
       if (pushHistory && currentPath.isNotEmpty && currentPath != abs) {
         backStack.add(currentPath);
       }
+      await reveal(abs);
+      await listDir(abs, force: true);
       currentPath = abs;
-      entries = items;
+      entries = children[abs] ?? [];
+      expanded.add(abs);
+      treeVersion++;
     } catch (e) {
       error = '打开目录失败：$e';
     } finally {
@@ -187,11 +280,40 @@ class SftpService extends ChangeNotifier {
     }
   }
 
+  /// 仅把工作目录切到已在树中的路径，不折叠其它已展开节点，也不发起网络请求。
+  void selectPath(String path, {bool pushHistory = true}) {
+    final abs = normalizeRemote(path);
+    if (abs == currentPath) return;
+    if (pushHistory && currentPath.isNotEmpty) backStack.add(currentPath);
+    currentPath = abs;
+    entries = children[abs] ?? [];
+    notifyListeners();
+  }
+
   List<RemoteEntry> get visibleEntries => showHidden
       ? entries
       : entries.where((e) => !e.name.startsWith('.')).toList();
 
-  Future<void> refresh() => cd(currentPath, pushHistory: false);
+  Future<void> refresh() async {
+    final paths = <String>{
+      normalizeRemote(currentPath),
+      ...expanded.map(normalizeRemote),
+      for (final p in children.keys) normalizeRemote(p),
+    };
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      for (final path in paths) {
+        await listDir(path, force: true);
+      }
+      entries = children[normalizeRemote(currentPath)] ?? [];
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> up() => cd(remoteParent(currentPath));
   Future<void> back() async {
     if (backStack.isEmpty) return;
@@ -201,7 +323,18 @@ class SftpService extends ChangeNotifier {
 
   void toggleHidden(bool v) {
     showHidden = v;
+    treeVersion++;
     notifyListeners();
+  }
+
+  RemoteEntry? entryByPath(String path) {
+    final parent = remoteParent(normalizeRemote(path));
+    final list = children[parent];
+    if (list == null) return null;
+    for (final e in list) {
+      if (e.path == path) return e;
+    }
+    return null;
   }
 
   Future<String> _exec(String cmd) async {
@@ -351,14 +484,24 @@ class SftpService extends ChangeNotifier {
 
   Timer? _refreshTimer;
 
-  /// 远程路径就是当前目录或其直接子项时刷新列表，并合并短时间内的多次刷新。
+  /// 远程路径落在已缓存/当前目录时刷新对应节点，并合并短时间内的多次刷新。
   void _refreshIfVisible(String remotePath) {
-    if (remotePath != currentPath && remoteParent(remotePath) != currentPath) {
-      return;
-    }
+    final abs = normalizeRemote(remotePath);
+    final parent = remoteParent(abs);
+    final targets = <String>{
+      if (abs == currentPath || children.containsKey(abs) || expanded.contains(abs))
+        abs,
+      if (parent == currentPath ||
+          children.containsKey(parent) ||
+          expanded.contains(parent))
+        parent,
+    };
+    if (targets.isEmpty) return;
     _refreshTimer?.cancel();
-    _refreshTimer = Timer(const Duration(milliseconds: 400), () {
-      if (!loading) refresh();
+    _refreshTimer = Timer(const Duration(milliseconds: 400), () async {
+      for (final p in targets) {
+        await listDir(p, force: true);
+      }
     });
   }
 

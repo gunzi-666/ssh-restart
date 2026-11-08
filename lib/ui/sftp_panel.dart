@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -38,6 +39,10 @@ class _SftpPanelState extends State<SftpPanel> {
   final Map<String, Timer> _watchers = {};
   int _sortCol = 0;
   bool _asc = true;
+  List<({RemoteEntry entry, int depth})>? _rowsCache;
+  Object? _rowsKey;
+  String? _lastTapPath;
+  DateTime? _lastTapAt;
   bool _dragging = false;
   Timer? _barTimer;
 
@@ -83,8 +88,8 @@ class _SftpPanelState extends State<SftpPanel> {
     return dir.path;
   }
 
-  List<RemoteEntry> _sorted(SftpService s) {
-    final list = [...s.visibleEntries];
+  List<RemoteEntry> _sortedChildren(SftpService s, String dir) {
+    final list = [...s.visibleChildren(dir)];
     int cmp(RemoteEntry a, RemoteEntry b) => switch (_sortCol) {
           1 => a.size.compareTo(b.size),
           2 => (a.modified ?? DateTime(0)).compareTo(b.modified ?? DateTime(0)),
@@ -99,13 +104,52 @@ class _SftpPanelState extends State<SftpPanel> {
     return list;
   }
 
-  List<RemoteEntry> _selection(SftpService s) =>
-      s.entries.where((e) => _selected.contains(e.path)).toList();
+  /// 从根目录起展平为带缩进深度的树行；仅在树结构或排序变化时重算。
+  List<({RemoteEntry entry, int depth})> _treeRows(SftpService s) {
+    final key = (s, s.treeVersion, _sortCol, _asc);
+    final cached = _rowsCache;
+    if (cached != null && _rowsKey == key) return cached;
+    final out = <({RemoteEntry entry, int depth})>[];
+    void walk(String dir, int depth) {
+      for (final e in _sortedChildren(s, dir)) {
+        out.add((entry: e, depth: depth));
+        if (e.isDir && s.expanded.contains(e.path)) {
+          walk(e.path, depth + 1);
+        }
+      }
+    }
+    walk('/', 0);
+    _rowsKey = key;
+    return _rowsCache = out;
+  }
+
+  /// 单击立即响应，同一行在双击间隔内再次点击才视为双击。
+  void _onRowTap(
+      SftpService s, List<({RemoteEntry entry, int depth})> rows, RemoteEntry e) {
+    final now = DateTime.now();
+    final last = _lastTapAt;
+    final dbl = _isDesktop &&
+        _lastTapPath == e.path &&
+        last != null &&
+        now.difference(last) < kDoubleTapTimeout;
+    _lastTapPath = e.path;
+    _lastTapAt = dbl ? null : now;
+    if (dbl) {
+      _open(s, e);
+    } else {
+      _onTap(s, rows, e);
+    }
+  }
+
+  List<RemoteEntry> _selection(SftpService s) => [
+        for (final p in _selected)
+          if (s.entryByPath(p) case final e?) e,
+      ];
 
   void _open(SftpService s, RemoteEntry e) {
     if (e.isDir) {
-      _selected.clear();
-      s.cd(e.path);
+      s.toggleExpand(e.path);
+      s.selectPath(e.path);
     } else {
       _edit(s, e);
     }
@@ -366,7 +410,11 @@ class _SftpPanelState extends State<SftpPanel> {
     }
   }
 
-  void _onTap(SftpService s, List<RemoteEntry> list, RemoteEntry e) {
+  void _onTap(
+    SftpService s,
+    List<({RemoteEntry entry, int depth})> rows,
+    RemoteEntry e,
+  ) {
     final hk = HardwareKeyboard.instance;
     setState(() {
       if (_selectMode) {
@@ -378,12 +426,12 @@ class _SftpPanelState extends State<SftpPanel> {
         _selected.contains(e.path) ? _selected.remove(e.path) : _selected.add(e.path);
         _anchor = e.path;
       } else if (hk.isShiftPressed && _anchor != null) {
-        final a = list.indexWhere((x) => x.path == _anchor);
-        final b = list.indexOf(e);
+        final a = rows.indexWhere((x) => x.entry.path == _anchor);
+        final b = rows.indexWhere((x) => x.entry.path == e.path);
         if (a >= 0 && b >= 0) {
           _selected.clear();
           for (var i = a < b ? a : b; i <= (a < b ? b : a); i++) {
-            _selected.add(list[i].path);
+            _selected.add(rows[i].entry.path);
           }
         }
       } else {
@@ -393,6 +441,9 @@ class _SftpPanelState extends State<SftpPanel> {
         _anchor = e.path;
       }
     });
+    if (e.isDir) {
+      s.selectPath(e.path);
+    }
     if (!_isDesktop && !_selectMode) _open(s, e);
   }
 
@@ -595,7 +646,7 @@ class _SftpPanelState extends State<SftpPanel> {
       listenable: s,
       builder: (context, _) {
         if (_pathCtrl.text != s.currentPath) _pathCtrl.text = s.currentPath;
-        final list = _sorted(s);
+        final rows = _treeRows(s);
         return LayoutBuilder(builder: (context, box) {
           // 以面板自身宽度判断：够宽才用多列表格，否则用紧凑列表，避免溢出。
           final wide = box.maxWidth >= 560;
@@ -615,16 +666,13 @@ class _SftpPanelState extends State<SftpPanel> {
               child: GestureDetector(
                 onSecondaryTapUp: (d) => _contextMenu(s, null, d.globalPosition),
                 child: ListView.builder(
-                  itemCount: list.length + 1,
+                  itemCount: rows.length,
                   itemExtent: _isDesktop ? 28 : 52,
                   itemBuilder: (context, i) {
-                    if (i == 0) return _parentRow(s, wide);
-                    final e = list[i - 1];
-                    // 交互模式只看是否桌面端：桌面端始终可双击进目录、
-                    // 右键选中并弹出完整菜单；wide 只决定显示多少列。
+                    final row = rows[i];
                     return _isDesktop
-                        ? _row(s, list, e, wide)
-                        : _mobileRow(s, list, e);
+                        ? _row(s, rows, row.entry, row.depth, wide)
+                        : _mobileRow(s, rows, row.entry, row.depth);
                   },
                 ),
               ),
@@ -634,7 +682,7 @@ class _SftpPanelState extends State<SftpPanel> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               alignment: Alignment.centerLeft,
               child: Text(
-                '${list.length} 项${_selected.isEmpty ? '' : '，已选 ${_selected.length} 项'}',
+                '${rows.length} 项${_selected.isEmpty ? '' : '，已选 ${_selected.length} 项'}',
                 style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor),
               ),
             ),
@@ -775,23 +823,6 @@ class _SftpPanelState extends State<SftpPanel> {
     );
   }
 
-  Widget _parentRow(SftpService s, bool wide) {
-    return InkWell(
-      onDoubleTap: _isDesktop ? s.up : null,
-      onTap: _isDesktop ? null : s.up,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: [
-            Icon(Icons.folder, size: 18, color: Colors.amber.shade700),
-            const SizedBox(width: 6),
-            const Text('..', style: TextStyle(fontSize: 12.5)),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _icon(RemoteEntry e) {
     if (e.isDir) {
       return Icon(e.isLink ? Icons.folder_shared : Icons.folder,
@@ -813,27 +844,101 @@ class _SftpPanelState extends State<SftpPanel> {
     return Icon(icon, size: 18);
   }
 
-  Widget _row(SftpService s, List<RemoteEntry> list, RemoteEntry e, bool wide) {
+  Widget _expandBtn(SftpService s, RemoteEntry e) {
+    if (!e.isDir) return const SizedBox(width: 18);
+    if (s.isListing(e.path)) {
+      return const SizedBox(
+        width: 18,
+        height: 18,
+        child: Padding(
+          padding: EdgeInsets.all(2),
+          child: CircularProgressIndicator(strokeWidth: 1.5),
+        ),
+      );
+    }
+    final open = s.expanded.contains(e.path);
+    return SizedBox(
+      width: 18,
+      height: 18,
+      child: InkWell(
+        onTap: () => s.toggleExpand(e.path),
+        borderRadius: BorderRadius.circular(4),
+        child: Icon(
+          open ? Icons.expand_more : Icons.chevron_right,
+          size: 18,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _nameCell(RemoteEntry e, TextStyle ts) {
+    final tip = e.linkTarget;
+    final muted = ts.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontSize: 11.5,
+    );
+    return Row(
+      children: [
+        _icon(e),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(e.name, style: ts, overflow: TextOverflow.ellipsis),
+        ),
+        if (tip != null) ...[
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text('→ $tip', style: muted, overflow: TextOverflow.ellipsis),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _row(
+    SftpService s,
+    List<({RemoteEntry entry, int depth})> rows,
+    RemoteEntry e,
+    int depth,
+    bool wide,
+  ) {
     final sel = _selected.contains(e.path);
+    final current = e.path == s.currentPath;
+    final cs = Theme.of(context).colorScheme;
     const ts = TextStyle(fontSize: 12.5);
     return GestureDetector(
-      onSecondaryTapUp: (d) => _contextMenu(s, e, d.globalPosition),
+      onSecondaryTapUp: (d) {
+        if (!_selected.contains(e.path)) {
+          setState(() {
+            _selected
+              ..clear()
+              ..add(e.path);
+            _anchor = e.path;
+          });
+        }
+        if (e.isDir) s.selectPath(e.path);
+        _contextMenu(s, e, d.globalPosition);
+      },
       child: Material(
-        color: sel ? Theme.of(context).colorScheme.primaryContainer : Colors.transparent,
+        color: sel
+            ? cs.primaryContainer
+            : current
+                ? cs.primary.withValues(alpha: 0.10)
+                : Colors.transparent,
         child: InkWell(
-          onTap: () => _onTap(s, list, e),
-          onDoubleTap: () => _open(s, e),
+          onTap: () => _onRowTap(s, rows, e),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Row(
               children: [
                 Expanded(
                   flex: 4,
                   child: Row(
                     children: [
-                      _icon(e),
-                      const SizedBox(width: 6),
-                      Expanded(child: Text(e.name, style: ts, overflow: TextOverflow.ellipsis)),
+                      SizedBox(width: depth * 14.0),
+                      _expandBtn(s, e),
+                      const SizedBox(width: 2),
+                      Expanded(child: _nameCell(e, ts)),
                     ],
                   ),
                 ),
@@ -856,23 +961,41 @@ class _SftpPanelState extends State<SftpPanel> {
     );
   }
 
-  Widget _mobileRow(SftpService s, List<RemoteEntry> list, RemoteEntry e) {
+  Widget _mobileRow(
+    SftpService s,
+    List<({RemoteEntry entry, int depth})> rows,
+    RemoteEntry e,
+    int depth,
+  ) {
     final sel = _selected.contains(e.path);
     return ListTile(
       dense: true,
       selected: sel,
+      contentPadding: EdgeInsets.only(left: 8.0 + depth * 14, right: 8),
       leading: _selectMode
           ? Checkbox(
               value: sel,
-              onChanged: (_) => _onTap(s, list, e),
+              onChanged: (_) => _onTap(s, rows, e),
             )
-          : _icon(e),
-      title: Text(e.name, overflow: TextOverflow.ellipsis),
+          : SizedBox(
+              width: 40,
+              child: Row(
+                children: [
+                  _expandBtn(s, e),
+                  const SizedBox(width: 2),
+                  _icon(e),
+                ],
+              ),
+            ),
+      title: Text(
+        e.linkTarget == null ? e.name : '${e.name} → ${e.linkTarget}',
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: Text(
         '${e.isDir ? '' : '${formatBytes(e.size)}  '}${formatDateTime(e.modified)}  ${e.permissionString}',
         style: const TextStyle(fontSize: 11),
       ),
-      onTap: () => _onTap(s, list, e),
+      onTap: () => _onTap(s, rows, e),
       onLongPress: () {
         setState(() {
           _selectMode = true;
