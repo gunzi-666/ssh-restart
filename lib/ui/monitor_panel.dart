@@ -354,13 +354,19 @@ class MonitorPanel extends StatelessWidget {
 Future<void> showProcessManager(BuildContext context, ServerMonitor m) {
   return showDialog(
     context: context,
-    builder: (ctx) => Dialog(
-      child: SizedBox(
-        width: 820,
-        height: 600,
-        child: _ProcessManager(monitor: m),
-      ),
-    ),
+    builder: (ctx) {
+      final size = MediaQuery.sizeOf(ctx);
+      return Dialog(
+        insetPadding: const EdgeInsets.all(24),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: SizedBox(
+          width: (size.width - 48).clamp(360.0, 880.0),
+          height: (size.height - 48).clamp(320.0, 640.0),
+          child: _ProcessManager(monitor: m),
+        ),
+      );
+    },
   );
 }
 
@@ -393,6 +399,132 @@ class _ProcessManagerState extends State<_ProcessManager> {
     }
   }
 
+  static const _wPid = 72.0;
+  static const _wUser = 96.0;
+  static const _wCpu = 64.0;
+  static const _wMem = 92.0;
+  static const _wAct = 112.0;
+  static const _mono = TextStyle(
+    fontSize: 12.5,
+    fontFeatures: [FontFeature.tabularFigures()],
+  );
+
+  TextStyle _headStyle(ColorScheme cs, bool active) => TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w600,
+        color: active ? cs.primary : cs.onSurfaceVariant,
+      );
+
+  Widget _head(String label, int col, {double? width, bool right = false}) {
+    final cs = Theme.of(context).colorScheme;
+    final active = _sortCol == col;
+    final text = Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: right ? MainAxisAlignment.end : MainAxisAlignment.start,
+      children: [
+        if (active && right)
+          Icon(_asc ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 13, color: cs.primary),
+        Text(label, style: _headStyle(cs, active)),
+        if (active && !right)
+          Icon(_asc ? Icons.arrow_upward : Icons.arrow_downward,
+              size: 13, color: cs.primary),
+      ],
+    );
+    final cell = InkWell(
+      onTap: () => setState(() {
+        if (_sortCol == col) {
+          _asc = !_asc;
+        } else {
+          _sortCol = col;
+          _asc = col == 1 || col == 4;
+        }
+      }),
+      child: Align(
+        alignment: right ? Alignment.centerRight : Alignment.centerLeft,
+        child: text,
+      ),
+    );
+    return width == null ? cell : SizedBox(width: width, child: cell);
+  }
+
+  Widget _row(ProcessInfo p, int i, ColorScheme cs) {
+    Widget btn(String label, String sig, Color color) => SizedBox(
+          height: 26,
+          child: TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 26),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+              textStyle: const TextStyle(fontSize: 12.5),
+            ),
+            onPressed: () => _kill(p, sig),
+            child: Text(label),
+          ),
+        );
+    return Material(
+      color: i.isOdd
+          ? cs.surfaceContainerHighest.withValues(alpha: 0.18)
+          : Colors.transparent,
+      child: InkWell(
+        onTap: () {},
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              SizedBox(
+                  width: _wPid,
+                  child: Text('${p.pid}', textAlign: TextAlign.right, style: _mono)),
+              SizedBox(
+                width: _wUser,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 16),
+                  child: Text(p.user,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5)),
+                ),
+              ),
+              SizedBox(
+                  width: _wCpu,
+                  child: Text(p.cpu.toStringAsFixed(1),
+                      textAlign: TextAlign.right,
+                      style: _mono.copyWith(
+                          color: p.cpu >= 50 ? cs.error : null))),
+              SizedBox(
+                  width: _wMem,
+                  child: Text(formatBytes(p.rssKb * 1024),
+                      textAlign: TextAlign.right, style: _mono)),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Tooltip(
+                  message: p.command,
+                  waitDuration: const Duration(milliseconds: 500),
+                  child: Text(p.command,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5)),
+                ),
+              ),
+              SizedBox(
+                width: _wAct,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    btn('结束', 'TERM', cs.primary),
+                    btn('强制', 'KILL', cs.error),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -415,106 +547,97 @@ class _ProcessManagerState extends State<_ProcessManager> {
           _ => a.command.compareTo(b.command),
         };
         list.sort((a, b) => _asc ? cmp(a, b) : cmp(b, a));
-        DataColumn col(String t, int i, {bool num = false}) => DataColumn(
-          label: Text(t),
-          numeric: num,
-          onSort: (_, _) => setState(() {
-            if (_sortCol == i) {
-              _asc = !_asc;
-            } else {
-              _sortCol = i;
-              _asc = false;
-            }
-          }),
-        );
+        final cs = Theme.of(context).colorScheme;
+        final shown = list.take(300).toList();
         return Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              padding: const EdgeInsets.fromLTRB(18, 12, 8, 10),
               child: Row(
                 children: [
                   Text(
-                    '进程管理 (${list.length})',
+                    '进程管理',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
+                  const SizedBox(width: 6),
+                  Text('${list.length}',
+                      style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
                   const SizedBox(width: 16),
                   Expanded(
-                    child: TextField(
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search, size: 18),
-                        hintText: '按命令、用户或 PID 过滤',
+                    child: SizedBox(
+                      height: 36,
+                      child: TextField(
+                        style: const TextStyle(fontSize: 13),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          prefixIcon: Icon(Icons.search, size: 18),
+                          hintText: '按命令、用户或 PID 过滤',
+                        ),
+                        onChanged: (v) =>
+                            setState(() => _filter = v.trim().toLowerCase()),
                       ),
-                      onChanged: (v) =>
-                          setState(() => _filter = v.trim().toLowerCase()),
                     ),
                   ),
+                  const SizedBox(width: 4),
                   IconButton(
+                    tooltip: '关闭',
                     onPressed: () => Navigator.pop(context),
                     icon: const Icon(Icons.close),
                   ),
                 ],
               ),
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    sortColumnIndex: _sortCol,
-                    sortAscending: _asc,
-                    headingRowHeight: 36,
-                    dataRowMinHeight: 30,
-                    dataRowMaxHeight: 34,
-                    columns: [
-                      col('PID', 0, num: true),
-                      col('用户', 1),
-                      col('CPU%', 2, num: true),
-                      col('内存', 3, num: true),
-                      col('命令', 4),
-                      const DataColumn(label: Text('操作')),
-                    ],
-                    rows: [
-                      for (final p in list.take(300))
-                        DataRow(
-                          cells: [
-                            DataCell(Text('${p.pid}')),
-                            DataCell(Text(p.user)),
-                            DataCell(Text(p.cpu.toStringAsFixed(1))),
-                            DataCell(Text(formatBytes(p.rssKb * 1024))),
-                            DataCell(
-                              SizedBox(
-                                width: 260,
-                                child: Text(
-                                  p.command,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                            DataCell(
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  TextButton(
-                                    onPressed: () => _kill(p, 'TERM'),
-                                    child: const Text('结束'),
-                                  ),
-                                  TextButton(
-                                    onPressed: () => _kill(p, 'KILL'),
-                                    child: const Text(
-                                      '强制结束',
-                                      style: TextStyle(color: Colors.red),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
+            Container(
+              height: 34,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                border: Border.symmetric(
+                    horizontal: BorderSide(color: cs.outlineVariant)),
+              ),
+              child: Row(
+                children: [
+                  _head('PID', 0, width: _wPid, right: true),
+                  SizedBox(
+                    width: _wUser,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 16),
+                      child: _head('用户', 1),
+                    ),
                   ),
-                ),
+                  _head('CPU%', 2, width: _wCpu, right: true),
+                  _head('内存', 3, width: _wMem, right: true),
+                  const SizedBox(width: 16),
+                  Expanded(child: _head('命令', 4)),
+                  SizedBox(
+                    width: _wAct,
+                    child: Text('操作',
+                        textAlign: TextAlign.center,
+                        style: _headStyle(cs, false)),
+                  ),
+                ],
               ),
             ),
+            Expanded(
+              child: shown.isEmpty
+                  ? Center(
+                      child: Text(
+                        widget.monitor.processes.isEmpty ? '正在获取进程列表…' : '没有匹配的进程',
+                        style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemExtent: 34,
+                      itemCount: shown.length,
+                      itemBuilder: (context, i) => _row(shown[i], i, cs),
+                    ),
+            ),
+            if (list.length > shown.length)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Text('仅显示前 ${shown.length} 个进程，可输入关键字过滤',
+                    style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+              ),
           ],
         );
       },

@@ -83,19 +83,30 @@ class _SessionManagerViewState extends State<SessionManagerView> {
     final groups = store.groups;
     final target = await showDialog<String>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('移动到分组'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, ''),
-            child: const Text('（根目录）'),
+      builder: (ctx) => AppDialog(
+        title: '移动到分组',
+        actions: [AppButton(label: '取消', onPressed: () => Navigator.pop(ctx))],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 360),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              AppMenuItem(
+                height: 38,
+                icon: Icons.home_outlined,
+                label: '（根目录）',
+                onTap: () => Navigator.pop(ctx, ''),
+              ),
+              for (final g in groups)
+                AppMenuItem(
+                  height: 38,
+                  icon: Icons.folder_outlined,
+                  label: _groupPath(g),
+                  onTap: () => Navigator.pop(ctx, g.id),
+                ),
+            ],
           ),
-          for (final g in groups)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, g.id),
-              child: Text(_groupPath(g)),
-            ),
-        ],
+        ),
       ),
     );
     if (target == null) return;

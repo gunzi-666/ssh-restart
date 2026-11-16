@@ -263,6 +263,8 @@ class QuickCommand {
   String name;
   String command;
   bool appendEnter;
+  /// 拖拽排序后的位置，越小越靠前。
+  int order;
   int updatedAt;
   bool deleted;
 
@@ -272,6 +274,7 @@ class QuickCommand {
     this.name = '',
     this.command = '',
     this.appendEnter = true,
+    this.order = 0,
     int? updatedAt,
     this.deleted = false,
   })  : id = id ?? newId(),
@@ -283,6 +286,7 @@ class QuickCommand {
         'name': name,
         'command': command,
         'appendEnter': appendEnter,
+        'order': order,
         'updatedAt': updatedAt,
         'deleted': deleted,
       };
@@ -293,6 +297,7 @@ class QuickCommand {
         name: j['name'] as String? ?? '',
         command: j['command'] as String? ?? '',
         appendEnter: j['appendEnter'] as bool? ?? true,
+        order: j['order'] as int? ?? 0,
         updatedAt: j['updatedAt'] as int?,
         deleted: j['deleted'] as bool? ?? false,
       );

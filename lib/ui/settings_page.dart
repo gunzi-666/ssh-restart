@@ -617,13 +617,14 @@ class _BackupSettingsState extends State<BackupSettings> {
 
   Future<bool?> _askReplace() => showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('导入方式'),
-          content: const Text('合并：保留本机数据，按更新时间合并同一会话。\n覆盖：用备份完全替换本机的会话、分组和快捷命令。'),
+        builder: (ctx) => AppDialog(
+          title: '导入方式',
+          description: '合并：保留本机数据，按更新时间合并同一会话。\n'
+              '覆盖：用备份完全替换本机的会话、分组和快捷命令。',
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('覆盖')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('合并')),
+            AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
+            AppButton(label: '覆盖', danger: true, onPressed: () => Navigator.pop(ctx, true)),
+            AppButton(label: '合并', primary: true, onPressed: () => Navigator.pop(ctx, false)),
           ],
         ),
       );
@@ -1016,6 +1017,10 @@ class _BackupSettingsState extends State<BackupSettings> {
     );
     if (ok != true) return;
     final chosen = [for (final g in picked) ...byGroup[g]!];
+    final base = store.nextQuickOrder;
+    for (final (i, q) in chosen.indexed) {
+      q.order = base + i;
+    }
     store.mergeBackup(sessions: const [], groups: const [], quickCommands: chosen);
     if (mounted) showToast(context, '已从 FinalShell 导入 ${chosen.length} 条快捷命令');
   }
@@ -1409,15 +1414,15 @@ class _RemoteBackupsDialogState extends State<_RemoteBackupsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Row(
-        children: [
-          const Expanded(child: Text('云盘备份')),
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
-        ],
-      ),
-      content: SizedBox(
-        width: 520,
+    return AppDialog(
+      title: '云盘备份',
+      description: '选择一个备份导入到本机，或删除不再需要的旧备份。',
+      width: 560,
+      actions: [
+        AppButton(label: '刷新', icon: Icons.refresh, onPressed: _busy ? null : _load),
+        AppButton(label: '关闭', onPressed: () => Navigator.pop(context)),
+      ],
+      child: SizedBox(
         height: 400,
         child: _busy
             ? const Center(child: CircularProgressIndicator())
@@ -1449,9 +1454,6 @@ class _RemoteBackupsDialogState extends State<_RemoteBackupsDialog> {
                             ],
                           ),
       ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
-      ],
     );
   }
 }

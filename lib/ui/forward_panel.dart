@@ -5,6 +5,7 @@ import '../models/session_config.dart';
 import '../services/app_store.dart';
 import '../state/ssh_tab.dart';
 import 'session_editor.dart';
+import 'widgets/shad.dart';
 
 /// 当前连接的端口转发（隧道）管理：临时添加、启停，或保存到会话配置。
 class ForwardPanel extends StatelessWidget {
@@ -33,11 +34,15 @@ class ForwardPanel extends StatelessWidget {
                     if (!context.mounted) return;
                     final save = await showDialog<bool>(
                       context: context,
-                      builder: (ctx) => AlertDialog(
-                        content: const Text('是否把该转发规则保存到会话配置中，下次连接时自动启动？'),
+                      builder: (ctx) => AppDialog(
+                        title: '保存转发规则',
+                        description: '是否把该转发规则保存到会话配置中，下次连接时自动启动？',
                         actions: [
-                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('仅本次')),
-                          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
+                          AppButton(label: '仅本次', onPressed: () => Navigator.pop(ctx, false)),
+                          AppButton(
+                              label: '保存',
+                              primary: true,
+                              onPressed: () => Navigator.pop(ctx, true)),
                         ],
                       ),
                     );

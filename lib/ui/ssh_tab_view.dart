@@ -28,6 +28,7 @@ class _SshTabViewState extends State<SshTabView> {
   static bool _showLeft = true;
   static bool _showRight = true;
   static bool _showBottom = true;
+  static int _rightIndex = 0;
   int _bottomIndex = 0;
   int _mobileIndex = 0;
 
@@ -219,7 +220,7 @@ class _SshTabViewState extends State<SshTabView> {
 
   Widget _desktop(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final bottomTabs = ['命令历史', '快速命令', '隧道', '传输'];
+    final bottomTabs = ['命令历史', '隧道', '传输'];
     final bottomViews = [
       HistoryList(
         onPick: (c) {
@@ -231,7 +232,6 @@ class _SshTabViewState extends State<SshTabView> {
           tab.focusTerminal();
         },
       ),
-      QuickCommandPanel(onSend: (c) => sendQuickCommand(tab, c)),
       ForwardPanel(tab: tab),
       TransferPanel(tab: tab),
     ];
@@ -325,7 +325,7 @@ class _SshTabViewState extends State<SshTabView> {
                         onPressed: () => setState(() => _showBottom = !_showBottom),
                       ),
                       IconButton(
-                        tooltip: _showRight ? '隐藏文件面板' : '显示文件面板',
+                        tooltip: _showRight ? '隐藏右侧面板' : '显示右侧面板',
                         iconSize: 16,
                         visualDensity: VisualDensity.compact,
                         icon: Icon(
@@ -362,22 +362,18 @@ class _SshTabViewState extends State<SshTabView> {
                 children: [
                   Container(
                     height: 34,
-                    padding: const EdgeInsets.only(left: 12, right: 4),
+                    padding: const EdgeInsets.only(left: 6, right: 4),
                     decoration: BoxDecoration(
                       border:
                           Border(bottom: BorderSide(color: cs.outlineVariant)),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.folder_outlined, size: 15),
-                        const SizedBox(width: 6),
-                        const Expanded(
-                          child: Text('文件',
-                              style: TextStyle(
-                                  fontSize: 12.5, fontWeight: FontWeight.w600)),
-                        ),
+                        _rightTab(0, Icons.folder_outlined, '文件'),
+                        _rightTab(1, Icons.bolt_outlined, '快速命令'),
+                        const Spacer(),
                         IconButton(
-                          tooltip: '隐藏文件面板',
+                          tooltip: '隐藏右侧面板',
                           iconSize: 16,
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.chevron_right),
@@ -387,11 +383,17 @@ class _SshTabViewState extends State<SshTabView> {
                     ),
                   ),
                   Expanded(
-                    child: ListenableBuilder(
-                      listenable: tab,
-                      builder: (context, _) => SftpPanel(
-                          key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'),
-                          tab: tab),
+                    child: IndexedStack(
+                      index: _rightIndex,
+                      children: [
+                        ListenableBuilder(
+                          listenable: tab,
+                          builder: (context, _) => SftpPanel(
+                              key: ValueKey('sftp-${tab.id}-${tab.sftp.hashCode}'),
+                              tab: tab),
+                        ),
+                        QuickCommandPanel(onSend: (c) => sendQuickCommand(tab, c)),
+                      ],
                     ),
                   ),
                 ],
@@ -401,6 +403,28 @@ class _SshTabViewState extends State<SshTabView> {
         ],
       );
     });
+  }
+
+  Widget _rightTab(int index, IconData icon, String label) {
+    final cs = Theme.of(context).colorScheme;
+    final selected = _rightIndex == index;
+    return Padding(
+      padding: const EdgeInsets.only(right: 2),
+      child: TextButton.icon(
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          foregroundColor: selected ? cs.onSurface : cs.onSurfaceVariant,
+          backgroundColor: selected ? cs.secondaryContainer : null,
+        ),
+        onPressed: () => setState(() => _rightIndex = index),
+        icon: Icon(icon, size: 15),
+        label: Text(label,
+            style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal)),
+      ),
+    );
   }
 
   Widget _mobile(BuildContext context) {

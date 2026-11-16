@@ -22,6 +22,9 @@ class AppSettings {
   bool sftpShowHidden;
   bool confirmOnCloseTab;
 
+  /// 快捷命令分组的拖拽顺序；未列出的分组排在后面。
+  List<String> quickGroupOrder;
+
   /// 首页左侧分组栏宽度与已展开的分组，仅保存在本机。
   double sidebarWidth;
   List<String> expandedGroups;
@@ -66,6 +69,7 @@ class AppSettings {
     this.sftpFollowTerminal = false,
     this.sftpShowHidden = false,
     this.confirmOnCloseTab = true,
+    List<String>? quickGroupOrder,
     this.sidebarWidth = 232,
     List<String>? expandedGroups,
     this.homeScope = 'all',
@@ -85,7 +89,8 @@ class AppSettings {
     this.lastUploadAt = 0,
     this.lastImportedRemoteId = '',
     this.lastImportedRemoteTime = 0,
-  })  : expandedGroups = expandedGroups ?? [],
+  })  : quickGroupOrder = quickGroupOrder ?? [],
+        expandedGroups = expandedGroups ?? [],
         windowBounds = windowBounds ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -105,6 +110,7 @@ class AppSettings {
         'sftpFollowTerminal': sftpFollowTerminal,
         'sftpShowHidden': sftpShowHidden,
         'confirmOnCloseTab': confirmOnCloseTab,
+        'quickGroupOrder': quickGroupOrder,
         'sidebarWidth': sidebarWidth,
         'expandedGroups': expandedGroups,
         'homeScope': homeScope,
@@ -143,6 +149,7 @@ class AppSettings {
         'sftpFollowTerminal': sftpFollowTerminal,
         'sftpShowHidden': sftpShowHidden,
         'confirmOnCloseTab': confirmOnCloseTab,
+        'quickGroupOrder': quickGroupOrder,
       };
 
   void applyPortable(Map<String, dynamic> j) {
@@ -162,6 +169,7 @@ class AppSettings {
     sftpFollowTerminal = s.sftpFollowTerminal;
     sftpShowHidden = s.sftpShowHidden;
     confirmOnCloseTab = s.confirmOnCloseTab;
+    quickGroupOrder = s.quickGroupOrder;
   }
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
@@ -183,6 +191,7 @@ class AppSettings {
         sftpFollowTerminal: j['sftpFollowTerminal'] as bool? ?? false,
         sftpShowHidden: j['sftpShowHidden'] as bool? ?? false,
         confirmOnCloseTab: j['confirmOnCloseTab'] as bool? ?? true,
+        quickGroupOrder: (j['quickGroupOrder'] as List?)?.cast<String>().toList(),
         sidebarWidth: (j['sidebarWidth'] as num?)?.toDouble() ?? 232,
         expandedGroups: (j['expandedGroups'] as List?)?.cast<String>().toList(),
         homeScope: j['homeScope'] as String? ?? 'all',

@@ -38,8 +38,31 @@ class AppStore extends ChangeNotifier {
       _sessions.where((s) => !s.deleted).toList(growable: false);
   List<SessionGroup> get groups =>
       _groups.where((g) => !g.deleted).toList(growable: false);
-  List<QuickCommand> get quickCommands =>
-      _quickCommands.where((q) => !q.deleted).toList(growable: false);
+  /// 按拖拽顺序排列；顺序相同时保持原有先后。
+  List<QuickCommand> get quickCommands {
+    final list = [
+      for (final (i, q) in _quickCommands.indexed)
+        if (!q.deleted) (i, q),
+    ]..sort((a, b) {
+        final c = a.$2.order.compareTo(b.$2.order);
+        return c != 0 ? c : a.$1.compareTo(b.$1);
+      });
+    return [for (final (_, q) in list) q];
+  }
+
+  /// 快捷命令分组：先按保存的拖拽顺序，其余按命令中首次出现的先后。
+  List<String> get quickCommandGroups {
+    final present = {for (final q in quickCommands) q.group};
+    return [
+      for (final g in settings.quickGroupOrder)
+        if (present.remove(g)) g,
+      ...present,
+    ];
+  }
+
+  int get nextQuickOrder => _quickCommands
+      .where((q) => !q.deleted)
+      .fold(-1, (m, q) => max(m, q.order)) + 1;
 
   List<SessionConfig> get allSessionsRaw => _sessions;
   List<SessionGroup> get allGroupsRaw => _groups;
@@ -480,8 +503,60 @@ class AppStore extends ChangeNotifier {
     if (i >= 0) {
       _quickCommands[i] = q;
     } else {
+      q.order = nextQuickOrder;
       _quickCommands.add(q);
     }
+    _changed();
+  }
+
+  /// 按树状视图拖拽后的结果整体写回：[groups] 为分组顺序，[items] 为（命令 id, 所属分组）的先后。
+  void applyQuickLayout(List<String> groups, List<(String, String)> items) {
+    final byId = {for (final q in _quickCommands) q.id: q};
+    final now = nowMs();
+    for (final (i, (id, group)) in items.indexed) {
+      final q = byId[id];
+      if (q == null || (q.order == i && q.group == group)) continue;
+      q
+        ..order = i
+        ..group = group
+        ..updatedAt = now;
+    }
+    settings.quickGroupOrder = [...groups];
+    _changed();
+  }
+
+  void reorderQuickGroups(List<String> groups) {
+    settings.quickGroupOrder = [...groups];
+    _changed();
+  }
+
+  void renameQuickGroup(String from, String to) {
+    final now = nowMs();
+    for (final q in _quickCommands) {
+      if (!q.deleted && q.group == from) {
+        q
+          ..group = to
+          ..updatedAt = now;
+      }
+    }
+    final order = settings.quickGroupOrder;
+    if (order.contains(from)) {
+      order.remove(to);
+      order[order.indexOf(from)] = to;
+    }
+    _changed();
+  }
+
+  void deleteQuickGroup(String group) {
+    final now = nowMs();
+    for (final q in _quickCommands) {
+      if (!q.deleted && q.group == group) {
+        q
+          ..deleted = true
+          ..updatedAt = now;
+      }
+    }
+    settings.quickGroupOrder.remove(group);
     _changed();
   }
 

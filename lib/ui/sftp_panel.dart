@@ -1044,39 +1044,46 @@ Future<(int, bool)?> showChmodDialog(BuildContext context, int mode, {bool hasDi
                 cb('执行', 1 << shift),
               ],
             );
-        return AlertDialog(
-          title: const Text('文件权限'),
-          content: SizedBox(
-            width: 380,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                row('所有者', 6),
-                row('用户组', 3),
-                row('其他', 0),
-                const SizedBox(height: 8),
-                TextField(
+        return AppDialog(
+          title: '文件权限',
+          width: 420,
+          actions: [
+            AppButton(label: '取消', onPressed: () => Navigator.pop(ctx)),
+            AppButton(
+              label: '确定',
+              primary: true,
+              onPressed: () => Navigator.pop(ctx, (m, recursive)),
+            ),
+          ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              row('所有者', 6),
+              row('用户组', 3),
+              row('其他', 0),
+              const SizedBox(height: 10),
+              LabeledField(
+                label: '权限值（八进制）',
+                child: TextField(
                   controller: octal,
-                  decoration: const InputDecoration(labelText: '权限值（八进制）'),
+                  style: const TextStyle(fontSize: 14),
                   onChanged: (v) {
                     final parsed = int.tryParse(v, radix: 8);
                     if (parsed != null && parsed <= 0x1ff) setState(() => m = parsed);
                   },
                 ),
-                if (hasDir)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('应用到子目录和文件'),
-                    value: recursive,
-                    onChanged: (v) => setState(() => recursive = v ?? false),
-                  ),
-              ],
-            ),
+              ),
+              if (hasDir)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('应用到子目录和文件', style: TextStyle(fontSize: 14)),
+                  value: recursive,
+                  onChanged: (v) => setState(() => recursive = v ?? false),
+                ),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, (m, recursive)), child: const Text('确定')),
-          ],
         );
       },
     ),
