@@ -48,7 +48,38 @@ class AppStore extends ChangeNotifier {
   static Future<Directory> dataDir() async {
     final dir = await getApplicationSupportDirectory();
     if (!dir.existsSync()) dir.createSync(recursive: true);
+    if (Platform.isMacOS) {
+      migrateFromSandbox(dir, Platform.environment['HOME']);
+    }
     return dir;
+  }
+
+  /// 早期 macOS 版本启用了 App 沙盒，数据位于 ~/Library/Containers 下；
+  /// 关闭沙盒后首次启动时，若新目录还没有数据，则把旧数据复制过来（不删除原文件）。
+  @visibleForTesting
+  static void migrateFromSandbox(Directory dir, String? home) {
+    if (home == null) return;
+    final bundleId = p.basename(dir.path);
+    final old = Directory(p.join(home, 'Library', 'Containers', bundleId, 'Data',
+        'Library', 'Application Support', bundleId));
+    if (p.equals(old.path, dir.path) || !old.existsSync()) return;
+    bool hasData(Directory d) =>
+        File(p.join(d.path, dbName)).existsSync() ||
+        File(p.join(d.path, _legacyName)).existsSync();
+    if (hasData(dir) || !hasData(old)) return;
+    try {
+      for (final e in old.listSync(recursive: true, followLinks: false)) {
+        final target = p.join(dir.path, p.relative(e.path, from: old.path));
+        if (e is Directory) {
+          Directory(target).createSync(recursive: true);
+        } else if (e is File) {
+          Directory(p.dirname(target)).createSync(recursive: true);
+          e.copySync(target);
+        }
+      }
+    } catch (e) {
+      debugPrint('迁移沙盒数据失败：$e');
+    }
   }
 
   static const dbName = 'ssh_restart.db';

@@ -401,6 +401,10 @@ class Updater {
     if (err.contains('user canceled') || err.contains('-128')) {
       throw '已取消管理员授权，无法写入 ${p.dirname(appPath)}。可把应用放到用户目录后再更新，或手动下载覆盖';
     }
+    if (err.contains('-60005') || err.contains('-60007')) {
+      throw '系统拒绝了管理员授权（${p.dirname(appPath)}），没有弹出密码框。'
+          '旧版本运行在 App 沙盒中，无法申请管理员权限；请这一次到发布页手动下载新版覆盖，之后即可正常自动更新';
+    }
     throw '无法获取管理员权限（${p.dirname(appPath)}）：${auth.stderr}';
   }
 
