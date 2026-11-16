@@ -334,6 +334,63 @@ class AppStore extends ChangeNotifier {
     if (n > 0) _changed();
   }
 
+  /// 找出类型、地址、端口、用户名和跳板机都相同的服务器；每组第一项为建议保留的一台。
+  List<List<SessionConfig>> findDuplicateSessions() {
+    final jumps = {for (final s in sessions) ?s.jumpSessionId};
+    final byKey = <String, List<SessionConfig>>{};
+    for (final s in sessions) {
+      final key = [
+        s.type.name,
+        s.host.trim().toLowerCase(),
+        s.port,
+        s.username.trim(),
+        s.jumpSessionId ?? '',
+      ].join('\u0000');
+      byKey.putIfAbsent(key, () => []).add(s);
+    }
+    int rank(SessionConfig a, SessionConfig b) {
+      for (final c in [
+        (jumps.contains(b.id) ? 1 : 0) - (jumps.contains(a.id) ? 1 : 0),
+        (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0),
+        b.lastConnectedAt.compareTo(a.lastConnectedAt),
+        b.updatedAt.compareTo(a.updatedAt),
+      ]) {
+        if (c != 0) return c;
+      }
+      return 0;
+    }
+
+    return [
+      for (final list in byKey.values)
+        if (list.length > 1) list..sort(rank),
+    ];
+  }
+
+  /// 删除每组除第一项之外的服务器，并把指向被删项的跳板机改为保留项。
+  int removeDuplicateSessions(List<List<SessionConfig>> groups) {
+    final replace = <String, String>{};
+    for (final g in groups) {
+      final keep = g.first;
+      for (final s in g.skip(1)) {
+        replace[s.id] = keep.id;
+        if (s.favorite) keep.favorite = true;
+      }
+    }
+    if (replace.isEmpty) return 0;
+    for (final s in sessions) {
+      final to = replace[s.jumpSessionId];
+      if (to != null && !replace.containsKey(s.id) && to != s.id) {
+        s.jumpSessionId = to;
+        s.updatedAt = nowMs();
+      }
+    }
+    for (final g in groups) {
+      g.first.updatedAt = nowMs();
+    }
+    deleteSessions(replace.keys);
+    return replace.length;
+  }
+
   void toggleFavorite(String id) {
     final s = sessionById(id);
     if (s == null) return;

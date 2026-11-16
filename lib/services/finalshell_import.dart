@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:path/path.dart' as p;
 import 'package:pointycastle/api.dart' show KeyParameter;
 import 'package:pointycastle/block/desede_engine.dart';
 import 'package:pointycastle/digests/md5.dart';
@@ -31,7 +32,7 @@ class FinalShellImporter {
         if (env['LOCALAPPDATA'] != null) '${env['LOCALAPPDATA']}\\finalshell',
         '$home\\AppData\\Local\\finalshell',
         r'C:\Program Files\finalshell',
-        r'D:\finalshell',
+        for (final d in 'CDEFGHIJ'.split('')) '$d:\\finalshell',
       ],
       if (Platform.isMacOS) '$home/Library/FinalShell',
       if (Platform.isLinux) '$home/.finalshell',
@@ -81,13 +82,21 @@ class FinalShellImporter {
     return _parse(entries);
   }
 
+  /// FinalShell 的 backup（修改前的历史版本）和 deleted（已删除）目录不是有效连接。
+  static bool _isArchived(String path) => path
+      .toLowerCase()
+      .split('/')
+      .any((s) => s == 'backup' || s == 'deleted');
+
   static FinalShellImportResult _parse(List<_Entry> entries) {
     final r = FinalShellImportResult();
     final folders = <String, Map<String, dynamic>>{};
     final conns = <(_Entry, Map<String, dynamic>)>[];
+    final connIds = <String>{};
     final keys = <String, (String key, String pass)>{};
 
     for (final e in entries) {
+      if (_isArchived(e.path)) continue;
       final Object? json;
       try {
         json = jsonDecode(e.text);
@@ -98,6 +107,8 @@ class FinalShellImporter {
       final m = Map<String, dynamic>.from(json);
       final base = e.path.split('/').last.toLowerCase();
       if (m.containsKey('host')) {
+        final id = m['id'];
+        if (id is String && id.isNotEmpty && !connIds.add(id)) continue;
         conns.add((e, m));
       } else if (base == 'config.json' || base.contains('config')) {
         _collectKeys(m, keys);
@@ -264,6 +275,80 @@ class FinalShellImporter {
       bd.setInt64(i * 8, ld[i]);
     }
     return MD5Digest().process(bd.buffer.asUint8List());
+  }
+}
+
+/// FinalShell 快捷命令导入：读取 config.json 中的 quick_commands（分组 → 命令列表）。
+class FinalShellCommandImporter {
+  /// [path] 可以是 FinalShell 数据目录、其中的 conn 目录或 config.json 本身。
+  static Future<List<QuickCommand>?> fromPath(String path) async {
+    final candidates = [
+      path,
+      p.join(path, 'config.json'),
+      p.join(p.dirname(path), 'config.json'),
+    ];
+    for (final c in candidates) {
+      final f = File(c);
+      if (!f.existsSync()) continue;
+      try {
+        final list = parse(await f.readAsString());
+        if (list != null) return list;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// 从选中的 json / zip 文件中查找包含快捷命令的配置。
+  static List<QuickCommand>? fromFiles(Map<String, Uint8List> files) {
+    for (final MapEntry(key: name, value: bytes) in files.entries) {
+      final lower = name.toLowerCase();
+      if (lower.endsWith('.zip')) {
+        for (final f in ZipDecoder().decodeBytes(bytes)) {
+          if (!f.isFile || !f.name.toLowerCase().endsWith('.json')) continue;
+          final list = parse(
+              utf8.decode(f.readBytes() ?? const [], allowMalformed: true));
+          if (list != null) return list;
+        }
+      } else if (lower.endsWith('.json')) {
+        final list = parse(utf8.decode(bytes, allowMalformed: true));
+        if (list != null) return list;
+      }
+    }
+    return null;
+  }
+
+  /// 文件中没有 quick_commands 字段时返回 null。
+  static List<QuickCommand>? parse(String text) {
+    final Object? json;
+    try {
+      json = jsonDecode(text);
+    } catch (_) {
+      return null;
+    }
+    if (json is! Map || json['quick_commands'] is! List) return null;
+    int order(Object? m) => m is Map ? (FinalShellImporter._int(m['order']) ?? 0) : 0;
+    bool deleted(Map m) => (FinalShellImporter._int(m['delete_time']) ?? 0) > 0;
+
+    final groups = [...(json['quick_commands'] as List).whereType<Map>()]
+      ..sort((a, b) => order(a).compareTo(order(b)));
+    final out = <QuickCommand>[];
+    for (final g in groups) {
+      if (deleted(g)) continue;
+      final groupName = (g['name'] as String? ?? '').trim();
+      final cmds = [...((g['commands'] as List?) ?? const []).whereType<Map>()]
+        ..sort((a, b) => order(a).compareTo(order(b)));
+      for (final c in cmds) {
+        final command = c['command'] as String? ?? '';
+        if (deleted(c) || command.trim().isEmpty) continue;
+        out.add(QuickCommand(
+          group: groupName.isEmpty ? '默认' : groupName,
+          name: (c['name'] as String? ?? '').trim(),
+          command: command,
+          appendEnter: c['append_cr'] as bool? ?? true,
+        ));
+      }
+    }
+    return out;
   }
 }
 

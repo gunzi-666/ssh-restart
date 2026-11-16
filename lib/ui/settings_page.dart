@@ -697,14 +697,14 @@ class _BackupSettingsState extends State<BackupSettings> {
     });
   }
 
-  Future<void> _importFinalShell() async {
-    final detected = FinalShellImporter.detectDefaultDir();
-    final src = await showDialog<String>(
+  /// 选择 FinalShell 数据来源：'auto'（检测到的目录）、'dir' 或 'file'。
+  Future<String?> _pickFinalShellSource(
+      String title, String description, String? detected) {
+    return showDialog<String>(
       context: context,
       builder: (ctx) => AppDialog(
-        title: '从 FinalShell 导入',
-        description: '选择 FinalShell 的数据目录（包含 conn 文件夹）、conn 文件夹本身，'
-            '或包含连接配置的 zip / json 文件。',
+        title: title,
+        description: description,
         width: 480,
         actions: [AppButton(label: '取消', onPressed: () => Navigator.pop(ctx))],
         child: Container(
@@ -740,6 +740,16 @@ class _BackupSettingsState extends State<BackupSettings> {
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _importFinalShell() async {
+    final detected = FinalShellImporter.detectDefaultDir();
+    final src = await _pickFinalShellSource(
+      '从 FinalShell 导入服务器',
+      '选择 FinalShell 的数据目录（包含 conn 文件夹）、conn 文件夹本身，'
+          '或包含连接配置的 zip / json 文件。',
+      detected,
     );
     if (src == null) return;
 
@@ -786,8 +796,7 @@ class _BackupSettingsState extends State<BackupSettings> {
 
     String keyOf(SessionConfig s) => '${s.host}:${s.port}:${s.username}';
     final existing = {for (final s in store.sessions) keyOf(s)};
-    final fresh =
-        result.sessions.where((s) => !existing.contains(keyOf(s))).toList();
+    final fresh = result.sessions.where((s) => existing.add(keyOf(s))).toList();
     final dup = result.sessions.length - fresh.length;
 
     final byId = {for (final g in result.groups) g.id: g};
@@ -861,6 +870,154 @@ class _BackupSettingsState extends State<BackupSettings> {
     if (ok != true) return;
     store.mergeBackup(sessions: fresh, groups: groups, quickCommands: const []);
     if (mounted) showToast(context, '已从 FinalShell 导入 ${fresh.length} 台服务器');
+  }
+
+  Future<void> _importFinalShellCommands() async {
+    final detected = FinalShellImporter.detectDefaultDir();
+    final src = await _pickFinalShellSource(
+      '从 FinalShell 导入快捷命令',
+      '选择 FinalShell 的数据目录，或其中的 config.json（也可以是包含它的 zip）。'
+          '只导入快捷命令，不会导入服务器。',
+      detected,
+    );
+    if (src == null) return;
+
+    List<QuickCommand>? cmds;
+    var cancelled = false;
+    await _busy(() async {
+      switch (src) {
+        case 'auto':
+          cmds = await FinalShellCommandImporter.fromPath(detected!);
+        case 'dir':
+          final p = await FilePicker.getDirectoryPath(
+              dialogTitle: '选择 FinalShell 数据目录');
+          if (p == null) {
+            cancelled = true;
+            return;
+          }
+          cmds = await FinalShellCommandImporter.fromPath(p);
+        case 'file':
+          final r = await FilePicker.pickFiles(
+            dialogTitle: '选择 FinalShell 的 config.json',
+            allowMultiple: true,
+            withData: true,
+            type: FileType.custom,
+            allowedExtensions: const ['zip', 'json'],
+          );
+          if (r == null) {
+            cancelled = true;
+            return;
+          }
+          final files = <String, Uint8List>{};
+          for (final f in r.files) {
+            final bytes = f.bytes ??
+                (f.path != null ? await File(f.path!).readAsBytes() : null);
+            if (bytes != null) files[f.name] = bytes;
+          }
+          cmds = FinalShellCommandImporter.fromFiles(files);
+      }
+    });
+    if (!mounted || cancelled) return;
+    final list = cmds;
+    if (list == null) {
+      showToast(context, '没有找到 FinalShell 的快捷命令配置，请选择数据目录或 config.json');
+      return;
+    }
+    if (list.isEmpty) {
+      showToast(context, 'FinalShell 中没有快捷命令');
+      return;
+    }
+    await _confirmFinalShellCommands(list);
+  }
+
+  Future<void> _confirmFinalShellCommands(List<QuickCommand> list) async {
+    String keyOf(QuickCommand q) => '${q.group}\u0000${q.command.trim()}';
+    final existing = {for (final q in store.quickCommands) keyOf(q)};
+    final fresh = list.where((q) => !existing.contains(keyOf(q))).toList();
+    final dup = list.length - fresh.length;
+
+    final byGroup = <String, List<QuickCommand>>{};
+    for (final q in fresh) {
+      byGroup.putIfAbsent(q.group, () => []).add(q);
+    }
+    final picked = {...byGroup.keys};
+
+    final cs = Theme.of(context).colorScheme;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final count = [
+            for (final g in picked) ...byGroup[g]!,
+          ].length;
+          return AppDialog(
+            title: '确认导入快捷命令',
+            description: '识别到 ${list.length} 条快捷命令'
+                '${dup > 0 ? '，其中 $dup 条本机已存在（跳过）' : ''}。'
+                '可按分组勾选需要导入的部分。',
+            width: 460,
+            actions: [
+              AppButton(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
+              AppButton(
+                label: count == 0 ? '无可导入项' : '导入 $count 条命令',
+                primary: true,
+                onPressed: count == 0 ? null : () => Navigator.pop(ctx, true),
+              ),
+            ],
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 360),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: cs.outlineVariant),
+              ),
+              child: byGroup.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text('所有快捷命令本机都已存在', style: TextStyle(fontSize: 13)),
+                    )
+                  : ListView(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      children: [
+                        for (final MapEntry(key: g, value: items) in byGroup.entries)
+                          InkWell(
+                            onTap: () => setLocal(() =>
+                                picked.contains(g) ? picked.remove(g) : picked.add(g)),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              child: Row(
+                                children: [
+                                  Checkbox(
+                                    value: picked.contains(g),
+                                    onChanged: (v) => setLocal(() =>
+                                        v == true ? picked.add(g) : picked.remove(g)),
+                                  ),
+                                  Expanded(
+                                    child: Text(g,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 13.5)),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: Text('${items.length} 条',
+                                        style: TextStyle(
+                                            fontSize: 12.5, color: cs.onSurfaceVariant)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+          );
+        },
+      ),
+    );
+    if (ok != true) return;
+    final chosen = [for (final g in picked) ...byGroup[g]!];
+    store.mergeBackup(sessions: const [], groups: const [], quickCommands: chosen);
+    if (mounted) showToast(context, '已从 FinalShell 导入 ${chosen.length} 条快捷命令');
   }
 
   Future<void> _authorize() async {
@@ -970,9 +1127,15 @@ class _BackupSettingsState extends State<BackupSettings> {
           const SectionTitle('从其他软件导入'),
           ListTile(
             leading: const Icon(Icons.move_down_rounded),
-            title: const Text('从 FinalShell 导入'),
+            title: const Text('从 FinalShell 导入服务器'),
             subtitle: const Text('读取 FinalShell 的连接配置（目录、zip 或 json），自动解密密码并还原分组'),
             onTap: _importFinalShell,
+          ),
+          ListTile(
+            leading: const Icon(Icons.bolt_outlined),
+            title: const Text('从 FinalShell 导入快捷命令'),
+            subtitle: const Text('读取 FinalShell 的快捷命令（config.json），保留分组，可按分组选择导入'),
+            onTap: _importFinalShellCommands,
           ),
           const SectionTitle('谷歌云盘'),
           Padding(

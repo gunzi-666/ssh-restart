@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ssh_restart/models/session_config.dart';
 import 'package:ssh_restart/services/finalshell_import.dart';
@@ -97,5 +98,73 @@ void main() {
     expect(b.authType, AuthType.key);
     expect(b.privateKey, contains('BEGIN OPENSSH'));
     expect(b.groupId, isNull);
+  });
+
+  test('跳过 backup / deleted 目录中的历史副本，同一连接只保留一份', () {
+    List<int> conn(String id, String host) => utf8.encode(jsonEncode({
+          'id': id,
+          'name': host,
+          'host': host,
+          'port': 22,
+          'user_name': 'root',
+          'conection_type': 100,
+        }));
+    final archive = Archive()
+      ..addFile(ArchiveFile.bytes('finalshell/conn/a_connect_config.json', conn('a', '1.1.1.1')))
+      ..addFile(ArchiveFile.bytes('finalshell/conn/b_connect_config.json', conn('b', '2.2.2.2')))
+      ..addFile(ArchiveFile.bytes(
+          'finalshell/backup/connect_config_a/1714755758985.json', conn('a', '1.1.1.1')))
+      ..addFile(ArchiveFile.bytes(
+          'finalshell/deleted/20240424193149071/c_connect_config.json', conn('c', '3.3.3.3')))
+      ..addFile(ArchiveFile.bytes('finalshell/conn/copy/a_connect_config.json', conn('a', '1.1.1.1')));
+    final zip = Uint8List.fromList(ZipEncoder().encode(archive));
+    final r = FinalShellImporter.fromFiles({'finalshell.zip': zip});
+    expect(r.sessions.map((s) => s.host), ['1.1.1.1', '2.2.2.2']);
+  });
+
+  test('解析快捷命令：按顺序、跳过已删除和空命令、保留回车设置', () {
+    final text = jsonEncode({
+      'font_size': 14,
+      'quick_commands': [
+        {
+          'name': '运维',
+          'order': 2,
+          'delete_time': 0,
+          'commands': [
+            {'name': '看磁盘', 'command': 'df -h', 'append_cr': true, 'order': 1},
+            {'name': '空', 'command': '  ', 'append_cr': true, 'order': 2},
+          ],
+        },
+        {
+          'name': '常用',
+          'order': 1,
+          'commands': [
+            {'name': '多行', 'command': 'cd /tmp\nls', 'append_cr': false, 'order': 2},
+            {'name': '已删', 'command': 'rm x', 'delete_time': 1700000000, 'order': 3},
+            {'name': '进程', 'command': 'top', 'order': 1},
+          ],
+        },
+        {
+          'name': '旧分组',
+          'delete_time': 1700000000,
+          'commands': [
+            {'name': 'a', 'command': 'uptime'},
+          ],
+        },
+      ],
+    });
+    final list = FinalShellCommandImporter.parse(text)!;
+    expect(list.map((q) => '${q.group}/${q.name}'),
+        ['常用/进程', '常用/多行', '运维/看磁盘']);
+    expect(list[1].command, 'cd /tmp\nls');
+    expect(list[1].appendEnter, isFalse);
+    expect(list[0].appendEnter, isTrue);
+
+    expect(FinalShellCommandImporter.parse('{"host": "x"}'), isNull);
+    expect(FinalShellCommandImporter.parse('不是 json'), isNull);
+    expect(
+        FinalShellCommandImporter.fromFiles(
+            {'config.json': Uint8List.fromList(utf8.encode(text))})!.length,
+        3);
   });
 }

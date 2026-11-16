@@ -1333,8 +1333,116 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           onPressed: _importFromText,
           child: const Text('从文本批量导入'),
         ),
+        const Divider(height: 8),
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.cleaning_services_outlined, size: 18),
+          onPressed: _removeDuplicates,
+          child: const Text('去除重复服务器'),
+        ),
       ],
     );
+  }
+
+  Future<void> _removeDuplicates() async {
+    var total = 0;
+    var found = false;
+    while (true) {
+      final groups = store.findDuplicateSessions();
+      if (groups.isEmpty) break;
+      found = true;
+      if (!await _confirmDuplicates(groups)) break;
+      total += store.removeDuplicateSessions(groups);
+      if (!mounted) return;
+    }
+    if (!mounted) return;
+    if (total > 0) {
+      setState(_checked.clear);
+      showToast(context, '已删除 $total 台重复服务器');
+    } else if (!found) {
+      showToast(context, '没有发现重复的服务器');
+    }
+  }
+
+  Future<bool> _confirmDuplicates(List<List<SessionConfig>> groups) async {
+    final cs = Theme.of(context).colorScheme;
+    final remove = groups.fold(0, (n, g) => n + g.length - 1);
+    String groupName(String? id) =>
+        store.groups.where((g) => g.id == id).firstOrNull?.name ?? '未分组';
+    String where(SessionConfig s) {
+      final user = s.username.isEmpty ? '' : '${s.username}@';
+      return '$user${s.host}:${s.port} · ${groupName(s.groupId)}';
+    }
+
+    Widget line(SessionConfig s, bool keep) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(
+            children: [
+              Icon(
+                keep ? Icons.check_circle_outline : Icons.remove_circle_outline,
+                size: 16,
+                color: keep ? cs.primary : cs.error,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(children: [
+                    TextSpan(
+                      text: s.displayName,
+                      style: TextStyle(
+                        fontSize: 13,
+                        decoration: keep ? null : TextDecoration.lineThrough,
+                        color: keep ? cs.onSurface : cs.onSurfaceVariant,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '   ${where(s)}',
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                    ),
+                  ]),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        );
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AppDialog(
+        title: '去除重复服务器',
+        description: '找到 ${groups.length} 组重复（类型、地址、端口、用户名、跳板机都相同）。'
+            '每组保留一台：优先保留被用作跳板机的、已收藏的、最近连接或修改过的。',
+        width: 560,
+        actions: [
+          AppButton(label: '取消', onPressed: () => Navigator.pop(ctx, false)),
+          AppButton(
+            label: '删除 $remove 台',
+            danger: true,
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 380),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: cs.outlineVariant),
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            itemCount: groups.length,
+            separatorBuilder: (_, _) => const Divider(height: 14),
+            itemBuilder: (_, i) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (j, s) in groups[i].indexed) line(s, j == 0),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return ok == true;
   }
 
   Future<void> _importFromText() async {
