@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -40,6 +43,26 @@ class _SshRestartAppState extends State<SshRestartApp> {
     SSHConnector.hostKeyPrompt = _hostKeyPrompt;
     SSHConnector.interactivePrompt = _interactivePrompt;
     WindowStateKeeper.onCloseRequested = _onCloseRequested;
+    // macOS 的 ⌘Q / 菜单“退出”走系统退出流程，不经过窗口关闭事件。
+    if (Platform.isMacOS) {
+      _lifecycle = AppLifecycleListener(onExitRequested: _onExitRequested);
+    }
+  }
+
+  AppLifecycleListener? _lifecycle;
+
+  @override
+  void dispose() {
+    _lifecycle?.dispose();
+    super.dispose();
+  }
+
+  Future<AppExitResponse> _onExitRequested() async {
+    context.read<AppStore>().shutdown();
+    try {
+      await AppTray.instance.dispose();
+    } catch (_) {}
+    return AppExitResponse.exit;
   }
 
   bool _askingClose = false;

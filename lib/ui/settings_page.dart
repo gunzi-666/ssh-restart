@@ -811,10 +811,20 @@ class _BackupSettingsState extends State<BackupSettings> {
       return;
     }
 
-    String keyOf(SessionConfig s) => '${s.host}:${s.port}:${s.username}';
-    final existing = {for (final s in store.sessions) keyOf(s)};
-    final fresh = result.sessions.where((s) => existing.add(keyOf(s))).toList();
-    final dup = result.sessions.length - fresh.length;
+    final existing = {for (final s in store.sessions) s.duplicateKey};
+    final seen = <String>{};
+    final fresh = <SessionConfig>[];
+    var dup = 0, batchDup = 0;
+    for (final s in result.sessions) {
+      final key = s.duplicateKey;
+      if (existing.contains(key)) {
+        dup++;
+      } else if (!seen.add(key)) {
+        batchDup++;
+      } else {
+        fresh.add(s);
+      }
+    }
 
     final byId = {for (final g in result.groups) g.id: g};
     final used = <String>{};
@@ -868,6 +878,7 @@ class _BackupSettingsState extends State<BackupSettings> {
               row('识别到的 SSH 服务器', '${result.sessions.length} 台'),
               row('将导入', '${fresh.length} 台', color: cs.primary),
               if (dup > 0) row('本机已存在（跳过）', '$dup 台'),
+              if (batchDup > 0) row('FinalShell 中配置完全相同（跳过）', '$batchDup 台'),
               row('分组', '${groups.length} 个'),
               row('密码解密成功', '${result.passwordOk} 个'),
               if (result.passwordFailed > 0)

@@ -32,6 +32,9 @@ class AppSettings {
   /// 首页左侧上次选中的项，如 `all`、`group:<id>`、`session:<id>`，仅保存在本机。
   String homeScope;
 
+  /// 首页服务器列表的排序方式，如 `added:desc`，仅保存在本机。
+  String homeSort;
+
   /// 桌面端窗口位置与大小 [x, y, 宽, 高]（未最大化时的尺寸），仅保存在本机。
   List<double> windowBounds;
   bool windowMaximized;
@@ -76,6 +79,7 @@ class AppSettings {
     this.sidebarWidth = 232,
     List<String>? expandedGroups,
     this.homeScope = 'all',
+    this.homeSort = 'added:asc',
     List<double>? windowBounds,
     this.windowMaximized = false,
     this.closeAction = 'ask',
@@ -118,6 +122,7 @@ class AppSettings {
         'sidebarWidth': sidebarWidth,
         'expandedGroups': expandedGroups,
         'homeScope': homeScope,
+        'homeSort': homeSort,
         'windowBounds': windowBounds,
         'windowMaximized': windowMaximized,
         'closeAction': closeAction,
@@ -200,6 +205,7 @@ class AppSettings {
         sidebarWidth: (j['sidebarWidth'] as num?)?.toDouble() ?? 232,
         expandedGroups: (j['expandedGroups'] as List?)?.cast<String>().toList(),
         homeScope: j['homeScope'] as String? ?? 'all',
+        homeSort: j['homeSort'] as String? ?? 'added:asc',
         windowBounds: (j['windowBounds'] as List?)
             ?.map((e) => (e as num).toDouble())
             .toList(),

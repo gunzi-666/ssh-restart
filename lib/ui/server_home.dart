@@ -107,8 +107,25 @@ class _ServerHomeViewState extends State<ServerHomeView> {
   @override
   void initState() {
     super.initState();
+    _restoreSort();
     _restoreScope();
   }
+
+  void _restoreSort() {
+    final parts = context.read<AppStore>().settings.homeSort.split(':');
+    final key = _SortKey.values.where((e) => e.name == parts.first).firstOrNull;
+    if (key == null) return;
+    _sort = key;
+    _asc = parts.length < 2 || parts[1] != 'desc';
+  }
+
+  void _setSort(_SortKey key, bool asc) => _update(() {
+    _sort = key;
+    _asc = asc;
+    store.persistSettings(
+      (x) => x.homeSort = '${key.name}:${asc ? 'asc' : 'desc'}',
+    );
+  });
 
   void _restoreScope() {
     final store = context.read<AppStore>();
@@ -150,8 +167,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           _sort = _SortKey.recent;
           _asc = false;
         } else if (_scope == _Scope.recent) {
-          _sort = _SortKey.added;
-          _asc = true;
+          _restoreSort();
         }
         _scope = scope;
         _groupId = groupId;
@@ -1165,8 +1181,66 @@ class _ServerHomeViewState extends State<ServerHomeView> {
           () => _update(() => _type = _TypeFilter.favorite),
         ),
         const Spacer(),
+        _sortButton(),
+        const SizedBox(width: 8),
         _viewToggle(),
       ],
+    );
+  }
+
+  Widget _sortButton() {
+    final cs = Theme.of(context).colorScheme;
+    const options = [
+      (_SortKey.added, false, '添加时间（新的在前）'),
+      (_SortKey.added, true, '添加时间（旧的在前）'),
+      (_SortKey.name, true, '名称 A→Z'),
+      (_SortKey.name, false, '名称 Z→A'),
+      (_SortKey.address, true, '地址'),
+      (_SortKey.recent, false, '最近连接'),
+    ];
+    final current = options
+        .where((o) => o.$1 == _sort && o.$2 == _asc)
+        .firstOrNull;
+    final label = current?.$3 ?? '自定义排序';
+    Future<void> open(BuildContext ctx) async {
+      final box = ctx.findRenderObject() as RenderBox;
+      final pos = box.localToGlobal(Offset(0, box.size.height + 6));
+      final v = await showAppMenu<int>(ctx, pos, [
+        for (var i = 0; i < options.length; i++)
+          AppMenuEntry(
+            i,
+            options[i].$3,
+            icon: identical(options[i], current) ? Icons.check_rounded : null,
+          ),
+      ]);
+      if (v == null) return;
+      _setSort(options[v].$1, options[v].$2);
+    }
+
+    return Builder(
+      builder: (ctx) => Tooltip(
+        message: '排序方式',
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => open(ctx),
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: cs.outlineVariant),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.sort_rounded, size: 17, color: cs.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Text(label, style: TextStyle(fontSize: 12.5, color: cs.onSurface)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1417,7 +1491,7 @@ class _ServerHomeViewState extends State<ServerHomeView> {
       context: context,
       builder: (ctx) => AppDialog(
         title: '去除重复服务器',
-        description: '找到 ${groups.length} 组重复（类型、地址、端口、用户名、跳板机都相同）。'
+        description: '找到 ${groups.length} 组重复（名称、地址、认证信息、备注等配置完全相同）。'
             '每组保留一台：优先保留被用作跳板机的、已收藏的、最近连接或修改过的。',
         width: 560,
         actions: [
@@ -1832,18 +1906,16 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     final cs = Theme.of(context).colorScheme;
     final active = _sort == key;
     return InkWell(
-      onTap: () => setState(() {
+      onTap: () {
         final firstAsc = key != _SortKey.recent;
         if (_sort != key) {
-          _sort = key;
-          _asc = firstAsc;
+          _setSort(key, firstAsc);
         } else if (_asc == firstAsc) {
-          _asc = !firstAsc;
+          _setSort(key, !firstAsc);
         } else {
-          _sort = _SortKey.added;
-          _asc = true;
+          _setSort(_SortKey.added, true);
         }
-      }),
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 11),
         child: Row(

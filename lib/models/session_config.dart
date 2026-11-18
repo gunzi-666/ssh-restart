@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
@@ -164,6 +166,26 @@ class SessionConfig {
         updatedAt = updatedAt ?? nowMs();
 
   String get displayName => name.isEmpty ? host : name;
+
+  /// 判重用：除 id、分组、时间、收藏等元信息外，所有连接配置都相同才视为同一台。
+  String get duplicateKey => jsonEncode([
+        type.name,
+        host.trim().toLowerCase(),
+        port,
+        username.trim(),
+        authType.name,
+        password,
+        privateKey.trim(),
+        passphrase,
+        name.trim(),
+        description.trim(),
+        charset,
+        initCommand.trim(),
+        jumpSessionId ?? '',
+        legacyAlgorithms,
+        proxy.toJson(),
+        [for (final f in forwards) f.toJson()..remove('id')],
+      ]);
 
   Map<String, dynamic> toJson() => {
         'id': id,

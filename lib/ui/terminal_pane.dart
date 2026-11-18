@@ -322,8 +322,27 @@ class _TerminalPaneState extends State<TerminalPane> {
       if (_ime.busy) return KeyEventResult.handled;
       if (e is KeyDownEvent) _ime.updateCaret();
     }
-    if (e is! KeyDownEvent) return KeyEventResult.ignored;
     final hk = HardwareKeyboard.instance;
+    final mac = Platform.isMacOS;
+    // macOS：⌘ 组合键交给系统菜单（退出、关闭窗口、隐藏、最小化等），不能作为字符输入终端；
+    // 复制、粘贴、全选由终端自身的快捷键处理。
+    if (mac && hk.isMetaPressed) {
+      final k = e.logicalKey;
+      final zoomIn = k == LogicalKeyboardKey.equal ||
+          k == LogicalKeyboardKey.numpadAdd;
+      final zoomOut = k == LogicalKeyboardKey.minus ||
+          k == LogicalKeyboardKey.numpadSubtract;
+      if (zoomIn || zoomOut) {
+        if (e is KeyDownEvent) _zoom(zoomIn ? 1 : -1);
+        return KeyEventResult.handled;
+      }
+      if (k != LogicalKeyboardKey.keyC &&
+          k != LogicalKeyboardKey.keyV &&
+          k != LogicalKeyboardKey.keyA) {
+        return KeyEventResult.skipRemainingHandlers;
+      }
+    }
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
     if (hk.isControlPressed && hk.isShiftPressed) {
       if (e.logicalKey == LogicalKeyboardKey.keyC) {
         _copy();

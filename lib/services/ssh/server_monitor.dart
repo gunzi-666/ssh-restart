@@ -46,7 +46,26 @@ class ServerMonitor extends ChangeNotifier {
   String os = '';
   String kernel = '';
   String cpuModel = '';
+
+  /// 逻辑处理器数（nproc，含超线程）。
   int cpuCores = 0;
+
+  /// 物理核心数，取不到时为 0。
+  int cpuPhysicalCores = 0;
+
+  /// 运行在虚拟机中（cpuinfo 带 hypervisor 标志）。
+  bool cpuVirtual = false;
+
+  /// 物理机开启超线程时显示「4核8线程」，虚拟机按 vCPU 数显示「N核」。
+  String get cpuCoresLabel => coresLabel(cpuCores, cpuPhysicalCores, cpuVirtual);
+
+  static String coresLabel(int logical, int physical, bool virtual) {
+    if (logical <= 0) return '';
+    if (!virtual && physical > 0 && physical < logical) {
+      return '$physical核$logical线程';
+    }
+    return '$logical核';
+  }
 
   double uptimeSeconds = 0;
   List<double> load = [0, 0, 0];
@@ -81,7 +100,9 @@ class ServerMonitor extends ChangeNotifier {
       '(. /etc/os-release 2>/dev/null && echo "\$PRETTY_NAME") || uname -s; echo $_sep; '
       'uname -srm 2>/dev/null; echo $_sep; '
       "grep -m1 -E 'model name|Hardware|Processor' /proc/cpuinfo 2>/dev/null | cut -d: -f2; echo $_sep; "
-      "nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo";
+      "nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo; echo $_sep; "
+      "awk -F: '/^physical id/{p=\$2} /^core id/{print p \"-\" \$2}' /proc/cpuinfo 2>/dev/null | sort -u | wc -l; echo $_sep; "
+      'grep -qw hypervisor /proc/cpuinfo 2>/dev/null && echo vm';
 
   static const _script = 'export LC_ALL=C; cat /proc/uptime; echo $_sep; '
       'cat /proc/loadavg; echo $_sep; '
@@ -127,6 +148,8 @@ class ServerMonitor extends ChangeNotifier {
       kernel = at(2);
       cpuModel = at(3);
       cpuCores = int.tryParse(at(4)) ?? 0;
+      cpuPhysicalCores = int.tryParse(at(5)) ?? 0;
+      cpuVirtual = at(6) == 'vm';
       notifyListeners();
     } catch (_) {}
   }

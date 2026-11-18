@@ -92,7 +92,7 @@ class MonitorPanel extends StatelessWidget {
                 _kv(
                   context,
                   'CPU',
-                  '${m.cpuCores > 0 ? '${m.cpuCores}核 ' : ''}${m.cpuModel}',
+                  '${m.cpuCores > 0 ? '${m.cpuCoresLabel} ' : ''}${m.cpuModel}',
                 ),
               _kv(context, '运行', formatDuration(m.uptimeSeconds)),
               _kv(

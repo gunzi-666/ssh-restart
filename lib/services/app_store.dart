@@ -401,19 +401,12 @@ class AppStore extends ChangeNotifier {
     if (n > 0) _changed();
   }
 
-  /// 找出类型、地址、端口、用户名和跳板机都相同的服务器；每组第一项为建议保留的一台。
+  /// 找出连接配置完全相同（含名称、认证信息、备注）的服务器；每组第一项为建议保留的一台。
   List<List<SessionConfig>> findDuplicateSessions() {
     final jumps = {for (final s in sessions) ?s.jumpSessionId};
     final byKey = <String, List<SessionConfig>>{};
     for (final s in sessions) {
-      final key = [
-        s.type.name,
-        s.host.trim().toLowerCase(),
-        s.port,
-        s.username.trim(),
-        s.jumpSessionId ?? '',
-      ].join('\u0000');
-      byKey.putIfAbsent(key, () => []).add(s);
+      byKey.putIfAbsent(s.duplicateKey, () => []).add(s);
     }
     int rank(SessionConfig a, SessionConfig b) {
       for (final c in [
