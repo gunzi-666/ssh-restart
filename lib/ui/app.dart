@@ -4,7 +4,11 @@ import 'package:provider/provider.dart';
 
 import '../models/app_settings.dart';
 import '../services/app_store.dart';
+import '../services/app_tray.dart';
 import '../services/ssh/ssh_connector.dart';
+import '../services/window_state.dart';
+import '../state/app_tab.dart';
+import '../state/tabs_controller.dart';
 import 'app_style.dart';
 import 'home_page.dart';
 import 'unlock_page.dart';
@@ -35,6 +39,38 @@ class _SshRestartAppState extends State<SshRestartApp> {
     super.initState();
     SSHConnector.hostKeyPrompt = _hostKeyPrompt;
     SSHConnector.interactivePrompt = _interactivePrompt;
+    WindowStateKeeper.onCloseRequested = _onCloseRequested;
+  }
+
+  bool _askingClose = false;
+
+  Future<bool> _onCloseRequested() async {
+    if (_askingClose) return false;
+    final store = context.read<AppStore>();
+    var action = store.settings.closeAction;
+    if (action != 'tray' && action != 'exit') {
+      final ctx = navigatorKey.currentContext;
+      if (ctx == null) return true;
+      final connected = context
+          .read<TabsController>()
+          .sshTabs
+          .where((t) => t.status == TabStatus.connected)
+          .length;
+      _askingClose = true;
+      final r = await showDialog<(String, bool)>(
+        context: ctx,
+        builder: (c) => _CloseActionDialog(connected: connected),
+      );
+      _askingClose = false;
+      if (r == null) return false;
+      action = r.$1;
+      if (r.$2) store.updateSettings((s) => s.closeAction = r.$1);
+    }
+    if (action == 'tray') {
+      await AppTray.instance.hideToTray();
+      return false;
+    }
+    return true;
   }
 
   Future<bool> _hostKeyPrompt(
@@ -154,6 +190,64 @@ class _SshRestartAppState extends State<SshRestartApp> {
         GlobalCupertinoLocalizations.delegate,
       ],
       home: const _LockGate(),
+    );
+  }
+}
+
+/// 点击窗口关闭按钮时的询问框，返回（动作, 是否不再提醒）。
+class _CloseActionDialog extends StatefulWidget {
+  const _CloseActionDialog({required this.connected});
+
+  final int connected;
+
+  @override
+  State<_CloseActionDialog> createState() => _CloseActionDialogState();
+}
+
+class _CloseActionDialogState extends State<_CloseActionDialog> {
+  bool _remember = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AppDialog(
+      title: '关闭 SSH Restart',
+      description: widget.connected > 0
+          ? '当前有 ${widget.connected} 个连接，退出程序会全部断开；最小化到托盘则保持连接。'
+          : '可以最小化到系统托盘继续在后台运行，也可以直接退出程序。',
+      width: 440,
+      actions: [
+        AppButton(label: '取消', onPressed: () => Navigator.pop(context)),
+        AppButton(
+          label: '最小化到托盘',
+          onPressed: () => Navigator.pop(context, ('tray', _remember)),
+        ),
+        AppButton(
+          label: '退出程序',
+          primary: true,
+          onPressed: () => Navigator.pop(context, ('exit', _remember)),
+        ),
+      ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: () => setState(() => _remember = !_remember),
+        child: Row(
+          children: [
+            Checkbox(
+              value: _remember,
+              onChanged: (v) => setState(() => _remember = v ?? false),
+            ),
+            const Text('不再提醒'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '可在 设置 → 行为 中修改',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

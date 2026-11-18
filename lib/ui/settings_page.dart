@@ -338,6 +338,22 @@ class _GeneralSettings extends StatelessWidget {
           value: s.confirmOnCloseTab,
           onChanged: (v) => store.updateSettings((x) => x.confirmOnCloseTab = v),
         ),
+        if (Platform.isWindows || Platform.isMacOS || Platform.isLinux)
+          ListTile(
+            title: const Text('点击关闭按钮时'),
+            subtitle: const Text('最小化到托盘后，可从托盘图标重新打开或退出'),
+            trailing: AppSelect<String>(
+              value: const ['ask', 'tray', 'exit'].contains(s.closeAction)
+                  ? s.closeAction
+                  : 'ask',
+              options: const [
+                (value: 'ask', label: '每次询问'),
+                (value: 'tray', label: '最小化到托盘'),
+                (value: 'exit', label: '退出程序'),
+              ],
+              onChanged: (v) => store.updateSettings((x) => x.closeAction = v),
+            ),
+          ),
         ListTile(
           title: const Text('状态监控刷新间隔'),
           trailing: AppSelect<int>(

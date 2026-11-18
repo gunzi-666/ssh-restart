@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_store.dart';
+import 'app_tray.dart';
 
 /// 记住桌面端窗口的位置、大小与最大化状态，下次启动时恢复。
 class WindowStateKeeper with WindowListener {
@@ -18,6 +20,13 @@ class WindowStateKeeper with WindowListener {
   Rect? _restoreBounds;
 
   static const minSize = Size(900, 560);
+
+  static WindowStateKeeper? instance;
+
+  /// 点击窗口关闭按钮时由界面决定去向：返回 true 退出，false 表示已隐藏到托盘或取消。
+  static Future<bool> Function()? onCloseRequested;
+
+  bool _quitting = false;
 
   /// 上次保存的窗口区域；不存在或已不在任何屏幕内（如副屏已拔掉）时返回 null。
   static Future<Rect?> savedBounds(AppStore store) async {
@@ -48,6 +57,8 @@ class WindowStateKeeper with WindowListener {
   }
 
   void start() {
+    instance = this;
+    AppTray.instance.onQuit = exitApp;
     windowManager.addListener(this);
     windowManager.setPreventClose(true);
     refreshLayout();
@@ -119,12 +130,38 @@ class WindowStateKeeper with WindowListener {
 
   @override
   Future<void> onWindowClose() async {
+    if (_quitting) return;
+    final handler = onCloseRequested;
+    if (handler != null && !await handler()) return;
+    await quit();
+  }
+
+  /// 立即退出：先隐藏窗口并同步保存数据，然后直接结束进程。
+  /// 不能交给引擎正常销毁，SSH 连接等后台资源会让窗口卡住数秒才退出。
+  Future<void> quit() async {
+    if (_quitting) return;
+    _quitting = true;
     _timer?.cancel();
     try {
       await _capture();
-      await store.saveNow();
+    } catch (_) {}
+    try {
+      await windowManager.hide();
+    } catch (_) {}
+    try {
+      await AppTray.instance.dispose();
+    } catch (_) {}
+    try {
+      store.shutdown();
     } finally {
-      await windowManager.destroy();
+      exit(0);
     }
+  }
+
+  /// 不经过关闭确认直接退出，用于托盘菜单和安装更新。
+  static Future<void> exitApp() async {
+    final keeper = instance;
+    if (keeper != null) return keeper.quit();
+    await windowManager.destroy();
   }
 }

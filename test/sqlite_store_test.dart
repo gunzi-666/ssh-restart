@@ -106,4 +106,18 @@ void main() {
     await again.loadFrom(dir);
     expect(again.sessions, isEmpty);
   });
+
+  test('退出时 shutdown 会写入尚未保存的修改', () async {
+    final store = AppStore();
+    await store.loadFrom(dir);
+    store.upsertSession(SessionConfig(name: 'y', host: '2.2.2.2'));
+    store.persistSettings((s) => s.closeAction = 'tray');
+    store.shutdown();
+    store.shutdown();
+
+    final again = AppStore();
+    await again.loadFrom(dir);
+    expect(again.sessions.map((s) => s.host), ['2.2.2.2']);
+    expect(again.settings.closeAction, 'tray');
+  });
 }

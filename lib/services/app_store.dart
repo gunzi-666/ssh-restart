@@ -260,6 +260,19 @@ class AppStore extends ChangeNotifier {
     _writeAll(db);
   }
 
+  /// 退出前调用：写入所有未保存的修改并关闭数据库。
+  void shutdown() {
+    _saveTimer?.cancel();
+    final db = _db;
+    if (db == null) return;
+    _db = null;
+    try {
+      _writeAll(db);
+    } finally {
+      db.close();
+    }
+  }
+
   // ---------------- 启动密码 ----------------
   static const _pwIterations = 150000;
 

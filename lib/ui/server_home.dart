@@ -291,11 +291,11 @@ class _ServerHomeViewState extends State<ServerHomeView> {
 
   // ---------------- 会话与分组操作 ----------------
 
-  Future<void> _newSession(SessionType type) async {
+  Future<void> _newSession(SessionType type, {String? groupId}) async {
     final s = SessionConfig(
       type: type,
-      groupId: _scope == _Scope.group ? _groupId : null,
-      favorite: _scope == _Scope.favorites,
+      groupId: groupId ?? (_scope == _Scope.group ? _groupId : null),
+      favorite: groupId == null && _scope == _Scope.favorites,
     );
     if (type == SessionType.vnc) {
       s.port = 5900;
@@ -510,6 +510,9 @@ class _ServerHomeViewState extends State<ServerHomeView> {
 
   Future<void> _groupMenu(SessionGroup g, Offset pos) async {
     final r = await showAppMenu<String>(context, pos, const [
+      AppMenuEntry('ssh', '新建 SSH 连接', icon: Icons.terminal_rounded),
+      AppMenuEntry('vnc', '新建 VNC 连接', icon: Icons.desktop_windows_outlined),
+      AppMenuEntry.divider(),
       AppMenuEntry('sub', '新建子分组', icon: Icons.create_new_folder_outlined),
       AppMenuEntry('rename', '重命名', icon: Icons.drive_file_rename_outline),
       AppMenuEntry.divider(),
@@ -522,6 +525,10 @@ class _ServerHomeViewState extends State<ServerHomeView> {
     ]);
     if (!mounted) return;
     switch (r) {
+      case 'ssh':
+        _newSession(SessionType.ssh, groupId: g.id);
+      case 'vnc':
+        _newSession(SessionType.vnc, groupId: g.id);
       case 'sub':
         _newGroup(parentId: g.id);
       case 'rename':

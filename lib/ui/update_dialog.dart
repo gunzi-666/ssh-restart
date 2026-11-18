@@ -3,9 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:window_manager/window_manager.dart';
-
 import '../services/updater.dart';
+import '../services/window_state.dart';
 import 'app_style.dart';
 import 'widgets/shad.dart';
 
@@ -103,7 +102,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       if (!mounted) return;
       setState(() => _stage = _Stage.installing);
       await Updater.prepareInstall(file);
-      await windowManager.close();
+      await WindowStateKeeper.exitApp();
     } on UpdateCancelled {
       if (mounted) setState(() => _stage = _Stage.available);
     } catch (e) {

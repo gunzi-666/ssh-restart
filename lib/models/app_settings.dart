@@ -36,6 +36,9 @@ class AppSettings {
   List<double> windowBounds;
   bool windowMaximized;
 
+  /// 点击窗口关闭按钮时的动作：ask（每次询问）/ tray（最小化到托盘）/ exit（退出），仅保存在本机。
+  String closeAction;
+
   String backupKey;
   bool rememberBackupKey;
 
@@ -75,6 +78,7 @@ class AppSettings {
     this.homeScope = 'all',
     List<double>? windowBounds,
     this.windowMaximized = false,
+    this.closeAction = 'ask',
     this.backupKey = '',
     this.rememberBackupKey = true,
     this.gdriveClientId = '',
@@ -116,6 +120,7 @@ class AppSettings {
         'homeScope': homeScope,
         'windowBounds': windowBounds,
         'windowMaximized': windowMaximized,
+        'closeAction': closeAction,
         'backupKey': rememberBackupKey ? backupKey : '',
         'rememberBackupKey': rememberBackupKey,
         'gdriveClientId': gdriveClientId,
@@ -199,6 +204,7 @@ class AppSettings {
             ?.map((e) => (e as num).toDouble())
             .toList(),
         windowMaximized: j['windowMaximized'] as bool? ?? false,
+        closeAction: j['closeAction'] as String? ?? 'ask',
         backupKey: j['backupKey'] as String? ?? '',
         rememberBackupKey: j['rememberBackupKey'] as bool? ?? true,
         gdriveClientId: j['gdriveClientId'] as String? ?? '',
