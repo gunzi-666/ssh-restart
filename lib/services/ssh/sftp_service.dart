@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,8 +8,34 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../../models/session_config.dart';
+import 'transfer_worker.dart';
 
 String shQuote(String s) => "'${s.replaceAll("'", "'\\''")}'";
+
+/// SSH 加解密和界面在同一线程执行。传输时每连续占用约 4ms 就让出一次事件循环，
+/// 保证网速很快时界面仍能绘制、窗口仍能拖动。
+abstract final class _Pacer {
+  static final _sw = Stopwatch()..start();
+
+  static Future<void> yieldIfBusy() async {
+    if (_sw.elapsedMilliseconds < 4) return;
+    await Future<void>.delayed(Duration.zero);
+    _sw.reset();
+  }
+}
+
+/// 按 SFTP 写入包大小切分本地文件，每发出一块检查一次是否该让出线程。
+Stream<Uint8List> _pacedRead(String path) async* {
+  const chunk = 16 * 1024;
+  await for (final data in File(path).openRead()) {
+    final bytes = data is Uint8List ? data : Uint8List.fromList(data);
+    for (var i = 0; i < bytes.length; i += chunk) {
+      final end = i + chunk < bytes.length ? i + chunk : bytes.length;
+      yield Uint8List.sublistView(bytes, i, end);
+      await _Pacer.yieldIfBusy();
+    }
+  }
+}
 
 String joinRemote(String dir, String name) {
   if (dir.endsWith('/')) return '$dir$name';
@@ -114,10 +141,13 @@ class TransferTask {
 
 /// SFTP 文件浏览与传输队列。
 class SftpService extends ChangeNotifier {
-  SftpService(this.client, {this.charset = 'UTF-8'});
+  SftpService(this.client, {this.charset = 'UTF-8', this.workerFactory});
 
   final SSHClient client;
   final String charset;
+
+  /// 建立后台传输连接；为 null 时所有传输都走主连接。
+  final Future<TransferWorker> Function()? workerFactory;
   SftpClient? _sftp;
   Future<SftpClient>? _opening;
 
@@ -138,8 +168,11 @@ class SftpService extends ChangeNotifier {
   int treeVersion = 0;
 
   final List<TransferTask> transfers = [];
+  final Queue<TransferTask> _pending = Queue();
   int maxConcurrent = 2;
   int _running = 0;
+  Timer? _notifyTimer;
+  bool _disposed = false;
 
   Future<SftpClient> get sftp async {
     if (_sftp != null) return _sftp!;
@@ -154,8 +187,9 @@ class SftpService extends ChangeNotifier {
     try {
       final s = await sftp;
       // 记录用户主目录供“主目录”按钮使用，但默认进入根目录 /。
-      homePath = await s.absolute('.');
+      final home = s.absolute('.').then((h) => homePath = h);
       await cd('/', pushHistory: false);
+      await home;
     } catch (e) {
       error = 'SFTP 初始化失败：$e';
       notifyListeners();
@@ -164,6 +198,10 @@ class SftpService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    _notifyTimer?.cancel();
+    _workerIdleTimer?.cancel();
+    _worker?.close();
     for (final t in transfers) {
       t._cancel = true;
     }
@@ -174,19 +212,22 @@ class SftpService extends ChangeNotifier {
   Future<List<RemoteEntry>> _fetch(String abs) async {
     final s = await sftp;
     final list = await s.listdir(abs);
-    final items = <RemoteEntry>[];
-    for (final n in list) {
-      if (n.filename == '.' || n.filename == '..') continue;
-      var attrs = n.attr;
-      if (attrs.isSymbolicLink) {
-        try {
-          final target = await s.stat(joinRemote(abs, n.filename));
-          if (target.isDirectory) attrs = target;
-        } catch (_) {}
-      }
-      items.add(RemoteEntry(
-          n.filename, joinRemote(abs, n.filename), attrs, n.longname));
-    }
+    // 符号链接需要额外 stat 才知道是否指向目录，并发查询，避免逐个等待往返。
+    final items = await Future.wait([
+      for (final n in list)
+        if (n.filename != '.' && n.filename != '..')
+          () async {
+            final path = joinRemote(abs, n.filename);
+            var attrs = n.attr;
+            if (attrs.isSymbolicLink) {
+              try {
+                final target = await s.stat(path);
+                if (target.isDirectory) attrs = target;
+              } catch (_) {}
+            }
+            return RemoteEntry(n.filename, path, attrs, n.longname);
+          }(),
+    ]);
     items.sort((a, b) {
       if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
       return a.name.toLowerCase().compareTo(b.name.toLowerCase());
@@ -240,8 +281,8 @@ class SftpService extends ChangeNotifier {
     }
   }
 
-  /// 展开到 [path] 的全部祖先目录，使树状视图能看到该路径。
-  Future<void> reveal(String path) async {
+  /// 展开到 [path] 的全部祖先目录，使树状视图能看到该路径；未缓存的目录并发拉取。
+  Future<void> reveal(String path, {bool listSelf = true}) async {
     final abs = normalizeRemote(
         path.startsWith('/') ? path : await (await sftp).absolute(path));
     final chain = <String>[];
@@ -249,10 +290,11 @@ class SftpService extends ChangeNotifier {
       chain.add(p);
       if (p == '/') break;
     }
-    for (final dir in chain.reversed) {
-      await listDir(dir);
-      if (dir != abs) expanded.add(dir);
-    }
+    await Future.wait([
+      for (final dir in chain)
+        if (listSelf || dir != abs) listDir(dir),
+    ]);
+    expanded.addAll(chain.where((d) => d != abs));
     treeVersion++;
   }
 
@@ -266,8 +308,10 @@ class SftpService extends ChangeNotifier {
       if (pushHistory && currentPath.isNotEmpty && currentPath != abs) {
         backStack.add(currentPath);
       }
-      await reveal(abs);
-      await listDir(abs, force: true);
+      await Future.wait([
+        reveal(abs, listSelf: false),
+        listDir(abs, force: true),
+      ]);
       currentPath = abs;
       entries = children[abs] ?? [];
       expanded.add(abs);
@@ -294,24 +338,50 @@ class SftpService extends ChangeNotifier {
       ? entries
       : entries.where((e) => !e.name.startsWith('.')).toList();
 
+  /// 刷新当前目录和已展开的目录；未展开的缓存直接丢弃，下次展开时再拉取。
   Future<void> refresh() async {
-    final paths = <String>{
+    final visible = <String>{
       normalizeRemote(currentPath),
       ...expanded.map(normalizeRemote),
-      for (final p in children.keys) normalizeRemote(p),
     };
+    children.removeWhere((k, _) => !visible.contains(k));
+    await refreshDirs(visible);
+  }
+
+  /// 只刷新指定目录（并发拉取），用于删除、重命名等只影响少数目录的操作。
+  Future<void> refreshDirs(Iterable<String> dirs) async {
+    final paths = dirs.map(normalizeRemote).toSet();
     loading = true;
     error = null;
     notifyListeners();
     try {
-      for (final path in paths) {
-        await listDir(path, force: true);
+      final list = paths.toList();
+      const batch = 8;
+      for (var i = 0; i < list.length; i += batch) {
+        await Future.wait([
+          for (final p in list.skip(i).take(batch)) listDir(p, force: true),
+        ]);
       }
       entries = children[normalizeRemote(currentPath)] ?? [];
     } finally {
       loading = false;
       notifyListeners();
     }
+  }
+
+  /// 被删除或改名的路径：清掉它及其子目录的缓存与展开状态，并刷新所在目录。
+  Future<void> _afterRemoved(Iterable<String> paths) {
+    final parents = <String>{};
+    for (final raw in paths) {
+      final p = normalizeRemote(raw);
+      parents.add(remoteParent(p));
+      bool under(String k) => k == p || k.startsWith('$p/');
+      children.removeWhere((k, _) => under(k));
+      expanded.removeWhere(under);
+      if (under(normalizeRemote(currentPath))) currentPath = remoteParent(p);
+    }
+    treeVersion++;
+    return refreshDirs(parents);
   }
 
   Future<void> up() => cd(remoteParent(currentPath));
@@ -349,7 +419,7 @@ class SftpService extends ChangeNotifier {
   Future<void> mkdir(String name) async {
     final s = await sftp;
     await s.mkdir(joinRemote(currentPath, name));
-    await refresh();
+    await refreshDirs([currentPath]);
   }
 
   Future<void> createFile(String name) async {
@@ -359,29 +429,45 @@ class SftpService extends ChangeNotifier {
             SftpFileOpenMode.write |
             SftpFileOpenMode.exclusive);
     await f.close();
-    await refresh();
+    await refreshDirs([currentPath]);
   }
 
   Future<void> rename(RemoteEntry e, String newName) async {
     final s = await sftp;
     await s.rename(e.path, joinRemote(remoteParent(e.path), newName));
-    await refresh();
+    await _afterRemoved([e.path]);
   }
 
   Future<void> delete(List<RemoteEntry> items) async {
     final s = await sftp;
-    for (final e in items) {
-      if (e.isDir && !e.isLink) {
-        try {
-          await _exec('rm -rf -- ${shQuote(e.path)}');
-        } catch (_) {
-          await _deleteRecursive(s, e.path);
+    try {
+      await Future.wait([
+        for (final e in items)
+          if (!e.isDir || e.isLink) s.remove(e.path),
+      ]);
+      for (final e in items) {
+        if (e.isDir && !e.isLink) {
+          try {
+            await _exec('rm -rf -- ${shQuote(e.path)}');
+          } catch (_) {
+            await _deleteRecursive(s, e.path);
+          }
         }
-      } else {
-        await s.remove(e.path);
       }
+    } finally {
+      await _afterRemoved(items.map((e) => e.path));
     }
-    await refresh();
+  }
+
+  /// 修改属性后刷新条目所在目录，以及其下已展开的子目录（递归修改时会变化）。
+  Future<void> _refreshAround(List<RemoteEntry> items) {
+    final dirs = <String>{};
+    for (final e in items) {
+      final p = normalizeRemote(e.path);
+      dirs.add(remoteParent(p));
+      dirs.addAll(expanded.where((k) => k == p || k.startsWith('$p/')));
+    }
+    return refreshDirs(dirs);
   }
 
   Future<void> _deleteRecursive(SftpClient s, String path) async {
@@ -407,7 +493,7 @@ class SftpService extends ChangeNotifier {
         await s.setStat(e.path, SftpFileAttrs(mode: SftpFileMode.value(mode)));
       }
     }
-    await refresh();
+    await _refreshAround(items);
   }
 
   Future<void> chown(List<RemoteEntry> items, String owner,
@@ -416,7 +502,7 @@ class SftpService extends ChangeNotifier {
       await _exec(
           'chown ${recursive ? '-R ' : ''}${shQuote(owner)} -- ${shQuote(e.path)}');
     }
-    await refresh();
+    await _refreshAround(items);
   }
 
   Future<String> execInDir(String command) =>
@@ -635,15 +721,23 @@ class SftpService extends ChangeNotifier {
 
   void _enqueue(TransferTask t) {
     transfers.insert(0, t);
-    notifyListeners();
+    _pending.add(t);
+    _notifySoon();
+  }
+
+  /// 上传整个文件夹时会连续排入大量任务，合并成一次界面刷新。
+  void _notifySoon() {
+    if (_notifyTimer != null) return;
+    _notifyTimer = Timer(const Duration(milliseconds: 100), () {
+      _notifyTimer = null;
+      if (!_disposed) notifyListeners();
+    });
   }
 
   void _pump() {
-    while (_running < maxConcurrent) {
-      final next = transfers.reversed
-          .where((t) => t.state == TransferState.queued)
-          .firstOrNull;
-      if (next == null) break;
+    while (_running < maxConcurrent && _pending.isNotEmpty) {
+      final next = _pending.removeFirst();
+      if (next.state != TransferState.queued) continue;
       _running++;
       _runTask(next).whenComplete(() {
         _running--;
@@ -674,23 +768,36 @@ class SftpService extends ChangeNotifier {
     }
 
     try {
-      final s = await sftp;
-      if (t.kind == TransferKind.upload) {
+      final worker = await _workerFor(t);
+      if (t._cancel) {
+        // 等待后台连接期间已被取消。
+      } else if (worker != null) {
+        _workerIdleTimer?.cancel();
+        await worker.run(
+          t.id,
+          upload: t.kind == TransferKind.upload,
+          local: t.localPath,
+          remote: t.remotePath,
+          onProgress: (n, total) {
+            if (total > 0) t.total = total;
+            onProgress(n);
+          },
+        );
+      } else if (t.kind == TransferKind.upload) {
+        final s = await sftp;
         final f = await s.open(t.remotePath,
             mode: SftpFileOpenMode.create |
                 SftpFileOpenMode.write |
                 SftpFileOpenMode.truncate);
         try {
-          final w = f.write(
-            File(t.localPath).openRead().map(Uint8List.fromList),
-            onProgress: onProgress,
-          );
+          final w = f.write(_pacedRead(t.localPath), onProgress: onProgress);
           t._writer = w;
           await w.done;
         } finally {
           await f.close();
         }
       } else {
+        final s = await sftp;
         if (t.total == 0) {
           try {
             t.total = (await s.stat(t.remotePath)).size ?? 0;
@@ -703,6 +810,7 @@ class SftpService extends ChangeNotifier {
           await for (final chunk in f.read(onProgress: onProgress)) {
             if (t._cancel) break;
             sink.add(chunk);
+            await _Pacer.yieldIfBusy();
           }
         } finally {
           await sink.close();
@@ -716,19 +824,78 @@ class SftpService extends ChangeNotifier {
         t.state = TransferState.done;
       }
     } catch (e) {
-      t.state = TransferState.failed;
-      t.error = e.toString();
+      if (t._cancel) {
+        t.state = TransferState.cancelled;
+      } else {
+        t.state = TransferState.failed;
+        t.error = e.toString();
+      }
     }
     if (t.kind == TransferKind.upload) {
       if (t.state == TransferState.done) _refreshIfVisible(t.remotePath);
       _checkBatchFinished();
     }
+    _scheduleWorkerIdle();
     notifyListeners();
+  }
+
+  // ---------------- 后台传输连接 ----------------
+
+  /// 小于该大小的文件不值得为它单独建立后台连接（已有后台连接时仍会复用）。
+  static const _workerMinSize = 1024 * 1024;
+
+  TransferWorker? _worker;
+  Future<TransferWorker?>? _workerStarting;
+  bool _workerDisabled = false;
+  Timer? _workerIdleTimer;
+
+  /// 返回可用的后台传输连接；无法建立（如需要二次验证）时返回 null，改用主连接传输。
+  Future<TransferWorker?> _workerFor(TransferTask t) async {
+    final factory = workerFactory;
+    if (factory == null || _workerDisabled || _disposed) return null;
+    final w = _worker;
+    if (w != null && w.alive) return w;
+    _worker = null;
+    final starting = _workerStarting;
+    if (starting != null) return starting;
+    if (t.total < _workerMinSize) return null;
+    final future = factory().then<TransferWorker?>(
+      (w) {
+        if (_disposed) {
+          w.close();
+          return null;
+        }
+        return _worker = w;
+      },
+      onError: (Object e) {
+        _workerDisabled = true;
+        debugPrint('后台传输连接失败，改用主连接传输：$e');
+        return null;
+      },
+    );
+    _workerStarting = future;
+    future.whenComplete(() => _workerStarting = null);
+    return future;
+  }
+
+  /// 传输队列空闲一段时间后关闭后台连接。
+  void _scheduleWorkerIdle() {
+    if (_worker == null) return;
+    if (transfers.any((t) =>
+        t.state == TransferState.queued || t.state == TransferState.running)) {
+      return;
+    }
+    _workerIdleTimer?.cancel();
+    _workerIdleTimer = Timer(const Duration(minutes: 2), () {
+      _worker?.close();
+      _worker = null;
+    });
   }
 
   void cancel(TransferTask t) {
     t._cancel = true;
     t._writer?.abort();
+    _worker?.cancel(t.id);
     if (t.state == TransferState.queued) t.state = TransferState.cancelled;
     _checkBatchFinished();
     notifyListeners();
@@ -742,6 +909,7 @@ class SftpService extends ChangeNotifier {
     t.transferred = 0;
     t.error = null;
     t.state = TransferState.queued;
+    _pending.add(t);
     notifyListeners();
     _pump();
   }

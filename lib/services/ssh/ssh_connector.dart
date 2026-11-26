@@ -31,9 +31,39 @@ class SSHConnectResult {
   }
 }
 
+/// 连接所需的外部数据：查找跳板机会话、已信任的主机指纹。
+class _Ctx {
+  _Ctx({
+    required this.lookup,
+    required this.knownHost,
+    this.trust,
+    this.interactive = true,
+  });
+
+  final SessionConfig? Function(String? id) lookup;
+  final String? Function(String hostKey) knownHost;
+  final void Function(String hostKey, String fingerprint)? trust;
+
+  /// 为 false 时不弹任何确认框：未信任的指纹直接拒绝，需要额外验证码时放弃认证。
+  final bool interactive;
+}
+
 class SSHConnector {
   static HostKeyPrompt? hostKeyPrompt;
   static InteractivePrompt? interactivePrompt;
+
+  /// dartssh2 的 AES-GCM 每个数据包都重新初始化加密器，比 AES-CTR / ChaCha20 慢约 20 倍；
+  /// 加解密又和界面在同一线程执行，传输大文件时会让窗口卡死，所以 GCM 只作为最后的选择。
+  /// AES-CTR 是该库使用最久、最成熟的实现，排在 ChaCha20（3.2.0 才加入）之前。
+  static const _modern = SSHAlgorithms(
+    cipher: [
+      SSHCipherType.aes128ctr,
+      SSHCipherType.aes256ctr,
+      SSHCipherType.chacha20poly1305,
+      SSHCipherType.aes128gcm,
+      SSHCipherType.aes256gcm,
+    ],
+  );
 
   static const _legacy = SSHAlgorithms(
     kex: [
@@ -58,12 +88,12 @@ class SSHConnector {
       SSHHostkeyType.rsaSha1,
     ],
     cipher: [
-      SSHCipherType.aes256gcm,
-      SSHCipherType.aes128gcm,
-      SSHCipherType.chacha20poly1305,
+      SSHCipherType.aes128ctr,
       SSHCipherType.aes256ctr,
       SSHCipherType.aes192ctr,
-      SSHCipherType.aes128ctr,
+      SSHCipherType.chacha20poly1305,
+      SSHCipherType.aes128gcm,
+      SSHCipherType.aes256gcm,
       SSHCipherType.aes256cbc,
       SSHCipherType.aes192cbc,
       SSHCipherType.aes128cbc,
@@ -79,12 +109,12 @@ class SSHConnector {
   );
 
   /// 跳板机层数（不含目标服务器本身）。
-  static int _jumpCount(SessionConfig s, AppStore store) {
+  static int _jumpCount(SessionConfig s, _Ctx ctx) {
     var n = 0;
     var cur = s;
     final seen = <String>{s.id};
     while (n <= 6) {
-      final j = store.sessionById(cur.jumpSessionId);
+      final j = ctx.lookup(cur.jumpSessionId);
       if (j == null || !seen.add(j.id)) break;
       n++;
       cur = j;
@@ -98,17 +128,17 @@ class SSHConnector {
 
   static Future<SSHSocket> _openSocket(
     SessionConfig s,
-    AppStore store,
+    _Ctx ctx,
     List<SSHClient> jumps,
     int depth,
     int total,
     ConnectProgress? p,
   ) async {
     final name = _hopName(depth, total);
-    final jump = store.sessionById(s.jumpSessionId);
+    final jump = ctx.lookup(s.jumpSessionId);
     if (jump != null && jump.id != s.id) {
       if (depth > 5) throw StateError('跳板机层级过深，请检查是否存在循环引用');
-      final jr = await _connect(jump, store, jumps, depth + 1, total, p);
+      final jr = await _connect(jump, ctx, jumps, depth + 1, total, p);
       jumps.add(jr);
       p?.begin(depth == 0 ? '连接到服务器' : '连接到$name');
       p?.log('通过${_hopName(depth + 1, total)}转发到 ${s.host}:${s.port}');
@@ -199,14 +229,14 @@ class SSHConnector {
 
   static Future<SSHClient> _connect(
     SessionConfig s,
-    AppStore store,
+    _Ctx ctx,
     List<SSHClient> jumps,
     int depth,
     int total,
     ConnectProgress? p,
   ) async {
     final name = _hopName(depth, total);
-    final socket = await _openSocket(s, store, jumps, depth, total, p);
+    final socket = await _openSocket(s, ctx, jumps, depth, total, p);
     p?.log('TCP 连接已建立');
     p?.begin('配置$name连接协议');
     var logging = p != null;
@@ -230,7 +260,7 @@ class SSHConnector {
             },
       socket,
       username: s.username,
-      algorithms: s.legacyAlgorithms ? _legacy : const SSHAlgorithms(),
+      algorithms: s.legacyAlgorithms ? _legacy : _modern,
       identities: _identities(s),
       onPasswordRequest:
           s.password.isEmpty && s.authType == AuthType.key ? null : () => s.password,
@@ -241,6 +271,7 @@ class SSHConnector {
             req.prompts.first.promptText.toLowerCase().contains('password') &&
             s.password.isNotEmpty;
         if (allPassword) return [s.password];
+        if (!ctx.interactive) return null;
         final cb = interactivePrompt;
         if (cb == null) return req.prompts.map((_) => s.password).toList();
         Future<List<String>?> ask() => cb(
@@ -251,8 +282,9 @@ class SSHConnector {
       },
       onVerifyHostKey: (type, fpBytes) async {
         final fp = utf8.decode(fpBytes);
-        final known = store.knownHosts[hostKey];
+        final known = ctx.knownHost(hostKey);
         if (known == fp) return true;
+        if (!ctx.interactive) return false;
         final cb = hostKeyPrompt;
         Future<bool> ask() => cb!(hostKey, type, fp, known);
         final bool ok;
@@ -263,7 +295,7 @@ class SSHConnector {
               ? true
               : await (p == null ? ask() : p.waitForUser(ask));
         }
-        if (ok) store.setKnownHost(hostKey, fp);
+        if (ok) ctx.trust?.call(hostKey, fp);
         return ok;
       },
       // 服务器拒绝 env 等非必需请求时不中断会话，与 OpenSSH 行为一致。
@@ -285,11 +317,39 @@ class SSHConnector {
   }
 
   static Future<SSHConnectResult> connect(SessionConfig s, AppStore store,
-      {ConnectProgress? progress}) async {
+          {ConnectProgress? progress}) =>
+      _run(
+        s,
+        _Ctx(
+          lookup: store.sessionById,
+          knownHost: (k) => store.knownHosts[k],
+          trust: store.setKnownHost,
+        ),
+        progress,
+      );
+
+  /// 不弹任何确认框的连接，供后台 isolate 使用：[sessions] 提供跳板机配置，
+  /// 主机指纹必须已在 [knownHosts] 中，需要额外验证码的服务器会认证失败。
+  static Future<SSHConnectResult> connectDetached(
+    SessionConfig s,
+    Map<String, SessionConfig> sessions,
+    Map<String, String> knownHosts,
+  ) =>
+      _run(
+        s,
+        _Ctx(
+          lookup: (id) => id == null ? null : sessions[id],
+          knownHost: (k) => knownHosts[k],
+          interactive: false,
+        ),
+        null,
+      );
+
+  static Future<SSHConnectResult> _run(
+      SessionConfig s, _Ctx ctx, ConnectProgress? progress) async {
     final jumps = <SSHClient>[];
     try {
-      final c = await _connect(
-          s, store, jumps, 0, _jumpCount(s, store), progress);
+      final c = await _connect(s, ctx, jumps, 0, _jumpCount(s, ctx), progress);
       return SSHConnectResult(c, jumps);
     } catch (e) {
       for (final j in jumps) {

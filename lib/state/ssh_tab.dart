@@ -14,6 +14,7 @@ import '../services/ssh/port_forwarder.dart';
 import '../services/ssh/server_monitor.dart';
 import '../services/ssh/sftp_service.dart';
 import '../services/ssh/ssh_connector.dart';
+import '../services/ssh/transfer_worker.dart';
 import 'app_tab.dart';
 import 'connect_progress.dart';
 import 'editor_file.dart';
@@ -27,7 +28,10 @@ class SshTab extends AppTab {
     terminal.onResize = (w, h, pw, ph) {
       _cols = w;
       _rows = h;
-      _shell?.resizeTerminal(w, h, pw, ph);
+      if (status != TabStatus.connected) return;
+      try {
+        _shell?.resizeTerminal(w, h, pw, ph);
+      } catch (_) {}
     };
     terminal.onTitleChange = (t) {
       if (remoteTitle == t) return;
@@ -193,7 +197,11 @@ class SshTab extends AppTab {
 
       monitor = ServerMonitor(conn.client)
         ..start(Duration(seconds: store.settings.monitorIntervalSeconds.clamp(1, 60)));
-      sftp = SftpService(conn.client, charset: config.charset)
+      sftp = SftpService(
+        conn.client,
+        charset: config.charset,
+        workerFactory: () => TransferWorker.start(config, store),
+      )
         ..showHidden = store.settings.sftpShowHidden;
       sftp!.init();
       forwards = PortForwardManager(conn.client);

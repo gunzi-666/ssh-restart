@@ -280,7 +280,7 @@ class _SftpPanelState extends State<SftpPanel> {
     final args = items.map((e) => shQuote(e.name)).join(' ');
     await _run(() async {
       await s.execInDir('tar -czf ${shQuote(name.trim())} -- $args');
-      await s.refresh();
+      await s.refreshDirs([s.currentPath]);
     });
   }
 
